@@ -1,0 +1,9 @@
+%% Sample dist.config demonstrating dist plugin configuration
+
+{assembly, mydist, [
+    {format, zip},
+    {outdir, "target"},
+    {workdir, "/tmp/dist/.work"},
+    {incl_files, ["bin/*.escript"]},
+    {version, {git, tag}}  %% use {VCS, Mode} to figure out the version
+]}.

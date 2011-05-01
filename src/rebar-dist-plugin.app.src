@@ -1,0 +1,11 @@
+{application, 'rebar-dist-plugin',
+ [
+  {description, ""},
+  {vsn, git},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.
