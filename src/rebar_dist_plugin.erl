@@ -88,7 +88,7 @@ clean(Config, AppFile) ->
     end.
 
 dist(Conf) ->
-    Results = [ process_assembly(A, Conf) || A <- find_assemblies(Conf) ],
+    Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
     Errors = [R || R <- Results, R =/= ok],
     case (length(Errors) > 0) of
         true ->
@@ -101,7 +101,7 @@ dist(Conf) ->
 %% Internal API
 %%
 
-process_assembly(#assembly{name=Name, opts=Opts}, GlobalConf) ->
+process_assembly(#assembly{name=Name, opts=Opts}) ->
     ?DEBUG("~p::Config = ~p~n", [Name, Opts]),
     Format = proplists:get_value(format, Opts, targz),
     Outdir = proplists:get_value(outdir, Opts, "dist"),
@@ -109,10 +109,10 @@ process_assembly(#assembly{name=Name, opts=Opts}, GlobalConf) ->
     InclDirs = proplists:get_value(incl_dirs, Opts, []),
     ExclFiles = proplists:get_value(excl_files, Opts, []),
     ExclDirs = proplists:get_value(excl_dirs, Opts, []),
-    CopyDirs = filter(collect_dirs(InclDirs, Opts),
-                      flatten_specs(collect_dirs(ExclDirs, Opts))),
-    CopyFiles = filter(collect_files(InclFiles, Opts),
-                       flatten_specs(collect_files(ExclFiles, Opts))),
+    CopyDirs = filter(collect_dirs(InclDirs),
+                      flatten_specs(collect_dirs(ExclDirs))),
+    CopyFiles = filter(collect_files(InclFiles),
+                       flatten_specs(collect_files(ExclFiles))),
     MergedFsEntries = merge_entries(Format, CopyDirs, CopyFiles, Opts),
     generate_assembly(Format, Name, Outdir, MergedFsEntries).
 
@@ -126,7 +126,7 @@ generate_assembly(zip, Name, Outdir, MergedFsEntries) ->
     end,
     Filename = filename:join(Outdir, Name) ++ ".zip",
     %% TODO: we must *remove* any duplicate entries (prefix based)
-    {ok, {OutputFile, Archive}} = 
+    {ok, {_OutputFile, _Archive}} = 
         zip:create(Filename, MergedFsEntries, Opts ++ [memory]),
     %% TODO: reconstruct the template entries in memory before writing to disk
     error;
@@ -144,7 +144,7 @@ generate_assembly(tar, Name, Outdir, MergedFsEntries) ->
 merge_entries(Format, DirSpecs, FileSpecs, Opts) ->
     CopyDirs = flatten_specs(DirSpecs),
     CopyFiles = flatten_specs(FileSpecs),
-    TemplatedFiles = [ F || {S, F} <- CopyFiles, S#spec.template =:= true ],
+    TemplatedFiles = [ {S, F} || {S, F} <- CopyFiles, S#spec.template =:= true ],
     SpecificFiles = [ output_def(S, F, Format) || {S, F} <- CopyFiles,
                            not lists:any(prefix_of(F), CopyDirs) andalso
                            S#spec.template =/= true ],
@@ -156,9 +156,9 @@ output_def(Spec, {File, Data}, Format) ->
 output_def(Spec, File, Format) ->
     output_def(Spec, File, undefined, Format).
 
-output_def(Spec, File, Data, Format) ->
+output_def(Spec, File, Data, _Format) ->
     {ok, FI} = file:read_file_info(File),
-    PathInArchive = case Spec#spec.target of
+    _PathInArchive = case Spec#spec.target of
         undefined ->
             File;
         '_' ->
@@ -167,23 +167,20 @@ output_def(Spec, File, Data, Format) ->
             case FI#file_info.type of
                 regular ->
                     NewName = filename:join(Target, filename:basename(File)),
-                    {File, {rewrite, NewName}};
+                    {File, Data, {rewrite, NewName}};
                 _ ->
                     {File, {rewrite, Target}}
             end
     end.
-
-is_template({Spec, _}) ->
-    Spec#spec.template =:= true.
 
 prefix_of(F) ->
     fun(D) -> lists:prefix(D, F) end.
 
 merge_templates(TemplatedFiles, Format, Opts) ->
     Vars = dict:from_list(proplists:get_value(vars_file, Opts, [])),
-    lists:map(fun(F) -> apply_template(F, Vars, Format, Opts) end, TemplatedFiles).
+    lists:map(fun(F) -> apply_template(F, Vars, Format) end, TemplatedFiles).
 
-apply_template({Spec, File}, Vars, Format, Opts) ->
+apply_template({Spec, File}, Vars, Format) ->
     {ok, Bin} = file:read_file(File),
     output_def(Spec, {File, rebar_templater:render(Bin, Vars)}, Format).
 
@@ -200,10 +197,10 @@ filter({Spec, Incl}, Excl) ->
 should_include(Incl, Exclusions) ->
     not lists:any(fun(Ex) -> lists:prefix(Ex, Incl) end, Exclusions).
 
-collect_dirs(Includes, Opts) ->
+collect_dirs(Includes) ->
     lists:map(fun process_dir/1, Includes).
 
-collect_files(Includes, Opts) ->
+collect_files(Includes) ->
     Cwd = rebar_utils:get_cwd(),
     Dirs = lists:duplicate(length(Includes), Cwd),
     lists:map(fun process_files/1, lists:zip(Dirs, Includes)).
@@ -213,12 +210,12 @@ collect_files(Includes, Opts) ->
 %% TODO: unify process_files and process_dir
 %% TODO: rename process_dir => process_dirs
 
-process_files({Dir, #spec{path=Path, glob=undefined}=Spec}) ->
+process_files({_Dir, #spec{path=Path, glob=undefined}=Spec}) ->
     {Spec, Path};
 process_files({Dir, #spec{glob=Regex}=Spec}) ->
     {Spec, rebar_utils:find_files(Dir, Regex)};
 process_files({Dir, PathExpr}) when is_list(PathExpr) ->
-    process_files(Dir, #spec{glob=PathExpr}, Opts).
+    process_files({Dir, #spec{glob=PathExpr}}).
 
 process_dir(#spec{path=Path, glob=undefined}=Spec) ->
     {Spec, Path};
@@ -237,7 +234,7 @@ ensure_path(Dir) ->
     end,
     Dir.
 
-find_assemblies(#conf{ base=Base, rebar=Config, dist=DistConfig }) ->
+find_assemblies(#conf{ base=Base, dist=DistConfig }) ->
     case lists:filter(fun(X) -> element(1, X) == assembly end, DistConfig) of
         [] ->
             %% TODO: infer an assembly from *top level* config
