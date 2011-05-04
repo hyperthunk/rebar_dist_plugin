@@ -1,1 +1,5 @@
-examples/custom-assembly/deps/rebar-dist-plugin/
+examples/custom-assembly/deps/rebar-dist-plugin/examples/custom-assembly/ebin/custom_app_app.beam
+examples/custom-assembly/ebin/custom_app_sup.beam
+examples/custom-assembly/ebin/*.ap
+examples/custom-assembly/ebin/custom_app.app
+examples/custom-assembly/priv/bin/custom-app

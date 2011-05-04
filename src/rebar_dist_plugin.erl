@@ -41,8 +41,10 @@
 
 -include_lib("kernel/include/file.hrl").
 
--export([dist/2, distclean/2]).
--export([generate/2, clean/2]).
+-compile(export_all).
+
+%%-export([dist/2, distclean/2]).
+%%-export([generate/2, clean/2]).
 
 -define(DEBUG(Msg, Args),
     rebar_log:log(debug, "[~p] " ++ Msg, [?MODULE|Args])).
@@ -53,6 +55,7 @@
 -record(assembly, {name, opts}).
 -record(conf, {base, rebar, dist}).
 -record(spec, {path, glob, target, mode, template}).
+-record(entry, {spec, source, target, data, info}).
 
 %%
 %% Public API
@@ -60,12 +63,14 @@
 
 dist(Config, AppFile) ->
     %% AppName will be the default output filename
+    rebar_config:set_global(skip_deps, 1),
     {App, DistConfig} = scope_config(AppFile, Config),
     dist(#conf{ base=App, rebar=Config, dist=DistConfig }).
 
-distclean(Config, _) ->
-    rebar_log:log(debug, "Dist Plugin `distclean' ~p~n", [Config]),
-    ok.
+distclean(Config, AppFile) ->
+    {_, DistConfig} = scope_config(AppFile, Config),
+    Outdir = outdir(DistConfig),
+    rebar_file_utils:rm_rf(Outdir).
 
 generate(Config, AppFile) ->
     rebar_log:log(debug, "Dist Plugin `generate' ~p~n", [Config]),
@@ -101,88 +106,135 @@ dist(Conf) ->
 %% Internal API
 %%
 
+outdir(Opts) ->
+    proplists:get_value(outdir, Opts, "dist").
+
 process_assembly(#assembly{name=Name, opts=Opts}) ->
     ?DEBUG("~p::Config = ~p~n", [Name, Opts]),
     Format = proplists:get_value(format, Opts, targz),
-    Outdir = proplists:get_value(outdir, Opts, "dist"),
+    Outdir = outdir(Opts),
     InclFiles = proplists:get_value(incl_files, Opts, []),
     InclDirs = proplists:get_value(incl_dirs, Opts, []),
-    ExclFiles = proplists:get_value(excl_files, Opts, []),
-    ExclDirs = proplists:get_value(excl_dirs, Opts, []),
-    CopyDirs = filter(collect_dirs(InclDirs),
-                      flatten_specs(collect_dirs(ExclDirs))),
-    CopyFiles = filter(collect_files(InclFiles),
-                       flatten_specs(collect_files(ExclFiles))),
-    MergedFsEntries = merge_entries(Format, CopyDirs, CopyFiles, Opts),
+    ExclFiles = flatten_specs(collect_dirs(
+                            proplists:get_value(excl_files, Opts, []))),
+    ExclDirs = flatten_specs(collect_dirs(
+                            proplists:get_value(excl_dirs, Opts, []))),
+    CopyDirs = lists:map(fun(I) -> filter(I, ExclDirs) end,
+                         collect_dirs(InclDirs)),
+    CopyFiles = lists:map(fun(I) -> filter(I, ExclFiles) end,
+                          collect_files(InclFiles)),
+    ?DEBUG("CopyDirs: ~p - CopyFiles: ~p~n", [CopyDirs, CopyFiles]),
+    MergedFsEntries = merge_entries(CopyDirs, CopyFiles, Opts),
+    ?DEBUG("MergedFsEntries: ~p~n", [MergedFsEntries]),
     generate_assembly(Format, Name, Outdir, MergedFsEntries).
 
 generate_assembly(zip, Name, Outdir, MergedFsEntries) ->
     ensure_path(Outdir),
-    Opts = case rebar_config:get_global(verbose, false) of
+    Opts = case rebar_config:is_verbose() of
         true ->
             [verbose];
-        false ->
+        _ ->
             []
     end,
     Filename = filename:join(Outdir, Name) ++ ".zip",
+    ?DEBUG("Filename: ~p~n", [Filename]),
     %% TODO: we must *remove* any duplicate entries (prefix based)
-    {ok, {_OutputFile, _Archive}} = 
+    {ok, {_OutputFile, _Archive}} =
         zip:create(Filename, MergedFsEntries, Opts ++ [memory]),
     %% TODO: reconstruct the template entries in memory before writing to disk
+    ?DEBUG("MergedFsEntries: ~p~n", [MergedFsEntries]),
     error;
 generate_assembly(tar, Name, Outdir, MergedFsEntries) ->
     ensure_path(Outdir),
-    Opts = case rebar_config:get_global(verbose, false) of
+    Opts = case rebar_config:is_verbose() of
         true ->
             [write, compressed, verbose];
-        false ->
+        _ ->
             [write, compressed]
     end,
     Filename = filename:join(Outdir, Name) ++ ".tar.gz",
-    erl_tar:create(Filename, MergedFsEntries, Opts).
+    %% -record(entry, {spec, source, target, data, info}).
+    Entries = lists:map(fun tar_entry/1, MergedFsEntries),
+    ?DEBUG("Tar Entries: ~p~n", [Entries]),
+    erl_tar:create(Filename, Entries, Opts).
 
-merge_entries(Format, DirSpecs, FileSpecs, Opts) ->
+%% TODO: to write a directory into the tar with a different name, we will need
+%% to (recursively) copy it to a "work area" with the new name
+
+tar_entry(#entry{source=Src, target=Targ, data=undefined,
+                 info=#file_info{type=directory}}) when Src /= Targ ->
+    {Targ, Src};
+tar_entry(#entry{source=Src, target=undefined, data=undefined,
+                 info=#file_info{type=directory}}) ->
+    Src;
+tar_entry(#entry{source=Src, target=Targ, data=undefined,
+                 info=#file_info{type=regular}}) when Src == Targ ->
+    Src;
+tar_entry(#entry{source=Src, target=Targ, data=undefined,
+                 info=#file_info{type=regular}}) when Src /= Targ ->
+    {Targ, Src};
+tar_entry(#entry{source=Src, target=Targ, data=Bin,
+                 info=#file_info{type=regular}}) when Src /= Targ andalso
+                                                      is_binary(Bin) ->
+    {Targ, Bin}.
+
+merge_entries(DirSpecs, FileSpecs, Opts) ->
     CopyDirs = flatten_specs(DirSpecs),
     CopyFiles = flatten_specs(FileSpecs),
-    TemplatedFiles = [ {S, F} || {S, F} <- CopyFiles, S#spec.template =:= true ],
-    SpecificFiles = [ output_def(S, F, Format) || {S, F} <- CopyFiles,
-                           not lists:any(prefix_of(F), CopyDirs) andalso
-                           S#spec.template =/= true ],
-    ProcessedTemplates = merge_templates(TemplatedFiles, Format, Opts),
-    lists:concat([CopyDirs, SpecificFiles, ProcessedTemplates]).
+    ExtraFiles = [ output_def(S, F) || {S, F} <- CopyFiles,
+                           S#spec.template =/= true andalso
+                           not( lists:any(prefix_of(F), CopyDirs) ) ],
+    TemplatedFiles = [ {S, F} || {S, F} <- CopyFiles,
+                                 S#spec.template =:= true ],
+    ProcessedTemplates = merge_templates(TemplatedFiles, Opts),
+    FirstDirs = [ output_def(S, F) || {S, F} <- CopyDirs ],
+    lists:concat([FirstDirs, ExtraFiles, ProcessedTemplates]).
 
-output_def(Spec, {File, Data}, Format) ->
-    output_def(Spec, File, Data, Format);
-output_def(Spec, File, Format) ->
-    output_def(Spec, File, undefined, Format).
+output_def(Spec, {File, Data}) ->
+    output_def(Spec, File, Data);
+output_def(Spec, File) ->
+    output_def(Spec, File, undefined).
 
-output_def(Spec, File, Data, _Format) ->
+output_def(Spec, File, Data) ->
     {ok, FI} = file:read_file_info(File),
-    _PathInArchive = case Spec#spec.target of
+    case Spec#spec.target of
         undefined ->
-            File;
+            #entry{spec=Spec, source=File,
+                   data=Data, target=File, info=FI};
         '_' ->
-            File;
+            #entry{spec=Spec, source=File,
+                   data=Data, target=File, info=FI};
         Target ->
             case FI#file_info.type of
                 regular ->
                     NewName = filename:join(Target, filename:basename(File)),
-                    {File, Data, {rewrite, NewName}};
+                    #entry{spec=Spec, source=File,
+                           data=Data, target=NewName, info=FI};
                 _ ->
-                    {File, {rewrite, Target}}
+                    #entry{spec=Spec, source=File, target=File, info=FI}
             end
     end.
 
 prefix_of(F) ->
     fun(D) -> lists:prefix(D, F) end.
 
-merge_templates(TemplatedFiles, Format, Opts) ->
-    Vars = dict:from_list(proplists:get_value(vars_file, Opts, [])),
-    lists:map(fun(F) -> apply_template(F, Vars, Format) end, TemplatedFiles).
+merge_templates(TemplatedFiles, Opts) ->
+    Vars = case proplists:get_value(vars_file, Opts) of
+        undefined ->
+            dict:new();
+        Path ->
+            case file:consult(Path) of
+                {error, _} ->
+                    dict:new();
+                {ok, Terms} ->
+                    dict:from_list(Terms)
+            end
+    end,
+    lists:map(fun(F) -> apply_template(F, Vars) end, TemplatedFiles).
 
-apply_template({Spec, File}, Vars, Format) ->
+apply_template({Spec, File}, Vars) ->
     {ok, Bin} = file:read_file(File),
-    output_def(Spec, {File, rebar_templater:render(Bin, Vars)}, Format).
+    output_def(Spec, {File, rebar_templater:render(Bin, Vars)}).
 
 flatten_specs([]) ->
     [];
@@ -212,8 +264,9 @@ collect_files(Includes) ->
 
 process_files({_Dir, #spec{path=Path, glob=undefined}=Spec}) ->
     {Spec, Path};
-process_files({Dir, #spec{glob=Regex}=Spec}) ->
-    {Spec, rebar_utils:find_files(Dir, Regex)};
+process_files({Dir, #spec{glob=Glob}=Spec}) ->
+    Files = rebar_utils:find_files(Dir, Glob) ++ filelib:wildcard(Glob),
+    {Spec, Files};
 process_files({Dir, PathExpr}) when is_list(PathExpr) ->
     process_files({Dir, #spec{glob=PathExpr}}).
 
@@ -244,13 +297,13 @@ find_assemblies(#conf{ base=Base, dist=DistConfig }) ->
     end.
 
 scope_config(undefined, Config) ->
-    App = {app, basename()},
+    App = basename(),
     BaseConfig = rebar_config:get_list(Config, dist, []),
-    {App, [App|merge_config(BaseConfig)]};
+    {App, [{app, App}|merge_config(BaseConfig)]};
 scope_config(AppFile, Config) ->
-    App = {app, rebar_app_utils:app_name(AppFile)},
+    App = rebar_app_utils:app_name(AppFile),
     BaseConfig = rebar_config:get_list(Config, dist, []),
-    {App, [App|merge_config(BaseConfig)]}.
+    {App, [{app, App}|merge_config(BaseConfig)]}.
 
 merge_config(BaseConfig) ->
     case lists:keyfind(config, 1, BaseConfig) of
