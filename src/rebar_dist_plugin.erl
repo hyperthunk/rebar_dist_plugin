@@ -103,6 +103,36 @@ dist(Conf) ->
     end.
 
 %%
+%% (Public) Utility functions used in read_conf as bindings
+%%
+
+glob(Expr) ->
+    {glob, Expr}.
+
+template({glob, Glob}) ->
+    #spec{glob=Glob, template=true};
+template(Path) ->
+    #spec{path=Path, template=true}.
+
+template({glob, Glob}, Target) ->
+    #spec{glob=Glob, target=Target, template=true};
+template(Path, Target) ->
+    #spec{path=Path, target=Target, template=true}.
+
+spec({glob, Glob}, Target) ->
+    #spec{glob=Glob, target=Target};
+spec(Path, Target) ->
+    #spec{path=Path, target=Target}.
+
+%%spec(Glob, Mode, Owner, Group) ->
+%%    #spec{glob=Glob, mode={Mode, Owner, Group}}.
+
+%%spec(Glob, Target, Mode, Owner, Group) ->
+%%    #spec{glob=Glob, target=Target, mode={Mode, Owner, Group}}.
+
+
+
+%%
 %% Internal API
 %%
 
@@ -310,8 +340,8 @@ merge_config(BaseConfig) ->
         false ->
             BaseConfig;
         ConfigPath ->
-            case file:consult(ConfigPath) of
-               {ok, Terms} ->
+            case read_conf(ConfigPath) of
+               {ok, {dist, Terms}} ->
                    %% all non-assembly members are ignored
                    Assemblies = [ A || A <- Terms, element(1, A) =:= assembly ],
                    lists:foldl(fun merge_assemblies/2, BaseConfig, Assemblies);
@@ -326,3 +356,50 @@ merge_assemblies(E, Acc) ->
 
 basename() ->
     filename:basename(rebar_utils:get_cwd()).
+
+read_conf(File) ->
+    Bs = erl_eval:new_bindings(),
+    case file:path_open([rebar_utils:get_cwd()], File, [read]) of
+    {ok,Fd,Full} ->
+        case eval_stream(Fd, return, Bs) of
+            {ok,R} ->
+                file:close(Fd),
+                {ok, R, Full};
+            E1 ->
+                file:close(Fd),
+                E1
+        end;
+    E2 ->
+        E2
+    end.
+
+config_fn_handler(Name, Arguments) ->
+    apply(?MODULE, Name, Arguments).
+
+eval_stream(Fd, Handling, Bs) ->
+    eval_stream(Fd, Handling, 1, undefined, [], Bs).
+
+eval_stream(Fd, H, Line, Last, E, Bs) ->
+    eval_stream2(io:parse_erl_exprs(Fd, '', Line), Fd, H, Last, E, Bs).
+
+eval_stream2({ok,Form,EndLine}, Fd, H, Last, E, Bs0) ->
+    try erl_eval:exprs(Form, Bs0, {value, fun config_fn_handler/2}) of
+        {value,V,Bs} ->
+            eval_stream(Fd, H, EndLine, {V}, E, Bs)
+    catch Class:Reason ->
+        Error = {EndLine,?MODULE,{Class,Reason,erlang:get_stacktrace()}},
+        eval_stream(Fd, H, EndLine, Last, [Error|E], Bs0)
+    end;
+eval_stream2({error,What,EndLine}, Fd, H, Last, E, Bs) ->
+    eval_stream(Fd, H, EndLine, Last, [What | E], Bs);
+eval_stream2({eof,EndLine}, _Fd, H, Last, E, _Bs) ->
+    case {H, Last, E} of
+    {return, {Val}, []} ->
+        {ok, Val};
+    {return, undefined, E} ->
+        {error, hd(lists:reverse(E, [{EndLine,?MODULE,undefined_script}]))};
+    {ignore, _, []} ->
+        ok;
+    {_, _, [_|_] = E} ->
+        {error, hd(lists:reverse(E))}
+    end.
