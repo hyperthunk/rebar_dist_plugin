@@ -1,6 +1,6 @@
-{application, 'rebar-dist-plugin',
+{application, rebar_dist_plugin,
  [
-  {description, ""},
+  {description, "Rebar Dist Plugin"},
   {vsn, git},
   {registered, []},
   {applications, [

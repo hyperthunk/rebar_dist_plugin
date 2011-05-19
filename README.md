@@ -14,8 +14,10 @@ given on the command line).
 
 Include the following tuple in your rebar deps:
 
-    {deps, [{'rebar-dist-plugin', ".*", {git,
-        "git://github.com/hyperthunk/rebar-dist-plugin.git", "master"}}]}.
+```erlang
+{deps, [{'rebar-dist-plugin', ".*", {git,
+    "git://github.com/hyperthunk/rebar-dist-plugin.git", "master"}}]}.
+```
 
 Then you will be able to fetch and install the plugin (locally) with rebar:
 
@@ -33,8 +35,10 @@ use it in many projects. This can be done manually, or using a package manager:
 
 Configure the dist plugin in your `rebar.config` as usual:
 
-    {rebar_plugins, [rebar_dist_plugin]}.
-    {dist, [Options]}.
+```erlang
+{rebar_plugins, [rebar_dist_plugin]}.
+{dist, [Options]}.
+```
 
 See the [wiki](https://github.com/hyperthunk/rebar-dist-plugin/wiki) for details
 on the various options (and commands).

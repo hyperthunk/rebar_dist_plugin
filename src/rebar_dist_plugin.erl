@@ -40,11 +40,11 @@
 -module(rebar_dist_plugin).
 
 -include_lib("kernel/include/file.hrl").
+-export([dist/2, distclean/2]).
+-export([generate/2, clean/2]).
 
--compile(export_all).
-
-%%-export([dist/2, distclean/2]).
-%%-export([generate/2, clean/2]).
+-export([glob/1, spec/2, name/1]).
+-export([template/1, template/2]).
 
 -define(DEBUG(Msg, Args),
     rebar_log:log(debug, "[~p] " ++ Msg, [?MODULE|Args])).
@@ -107,7 +107,7 @@ dist(Conf) ->
 %%
 
 glob(Expr) ->
-    {glob, Expr}.
+    #spec{glob=Expr}.
 
 template({glob, Glob}) ->
     #spec{glob=Glob, template=true};
@@ -124,6 +124,9 @@ spec({glob, Glob}, Target) ->
 spec(Path, Target) ->
     #spec{path=Path, target=Target}.
 
+name(Target) ->
+    {name, Target}.
+
 %%spec(Glob, Mode, Owner, Group) ->
 %%    #spec{glob=Glob, mode={Mode, Owner, Group}}.
 
@@ -136,29 +139,24 @@ spec(Path, Target) ->
 %% Internal API
 %%
 
-outdir(Opts) ->
-    proplists:get_value(outdir, Opts, "dist").
-
 process_assembly(#assembly{name=Name, opts=Opts}) ->
-    ?DEBUG("~p::Config = ~p~n", [Name, Opts]),
-    Format = proplists:get_value(format, Opts, targz),
+    Format = proplists:get_value(format, Opts, tar),
     Outdir = outdir(Opts),
     InclFiles = proplists:get_value(incl_files, Opts, []),
     InclDirs = proplists:get_value(incl_dirs, Opts, []),
-    ExclFiles = flatten_specs(collect_dirs(
-                            proplists:get_value(excl_files, Opts, []))),
-    ExclDirs = flatten_specs(collect_dirs(
-                            proplists:get_value(excl_dirs, Opts, []))),
-    CopyDirs = lists:map(fun(I) -> filter(I, ExclDirs) end,
-                         collect_dirs(InclDirs)),
-    CopyFiles = lists:map(fun(I) -> filter(I, ExclFiles) end,
-                          collect_files(InclFiles)),
-    ?DEBUG("CopyDirs: ~p - CopyFiles: ~p~n", [CopyDirs, CopyFiles]),
-    MergedFsEntries = merge_entries(CopyDirs, CopyFiles, Opts),
-    ?DEBUG("MergedFsEntries: ~p~n", [MergedFsEntries]),
-    generate_assembly(Format, Name, Outdir, MergedFsEntries).
+    ExclFiles = collect_files(proplists:get_value(excl_files, Opts, [])),
+    ExclDirs = collect_dirs(proplists:get_value(excl_dirs, Opts, [])),
+    Excl = lists:concat([ExclDirs, ExclFiles]),
+    Files = collect_files(InclFiles),
+    CopyFiles = filter(merge_templates(Files, Opts), Excl),
+    DirEntryPaths = collect_dirs(InclDirs),
+    FilteredPaths = filter(DirEntryPaths, Excl),
+    MergedPaths = lists:foldl(fun merge_paths/2, FilteredPaths, CopyFiles),
+    Pwd = rebar_utils:get_cwd(),
+    MergedFsEntries = [ output_def(S, F, Pwd) || {S, F} <- MergedPaths ],
+    write_assembly(Format, Name, Outdir, MergedFsEntries, Opts).
 
-generate_assembly(zip, Name, Outdir, MergedFsEntries) ->
+write_assembly(zip, Name, Outdir, MergedFsEntries, _Conf) ->
     ensure_path(Outdir),
     Opts = case rebar_config:is_verbose() of
         true ->
@@ -167,14 +165,11 @@ generate_assembly(zip, Name, Outdir, MergedFsEntries) ->
             []
     end,
     Filename = filename:join(Outdir, Name) ++ ".zip",
-    ?DEBUG("Filename: ~p~n", [Filename]),
-    %% TODO: we must *remove* any duplicate entries (prefix based)
-    {ok, {_OutputFile, _Archive}} =
-        zip:create(Filename, MergedFsEntries, Opts ++ [memory]),
+    Result = zip:create(Filename, MergedFsEntries, Opts),
     %% TODO: reconstruct the template entries in memory before writing to disk
-    ?DEBUG("MergedFsEntries: ~p~n", [MergedFsEntries]),
-    error;
-generate_assembly(tar, Name, Outdir, MergedFsEntries) ->
+    ?DEBUG("Result: ~p~n", [Result]),
+    Result;
+write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
     ensure_path(Outdir),
     Opts = case rebar_config:is_verbose() of
         true ->
@@ -184,56 +179,77 @@ generate_assembly(tar, Name, Outdir, MergedFsEntries) ->
     end,
     Filename = filename:join(Outdir, Name) ++ ".tar.gz",
     %% -record(entry, {spec, source, target, data, info}).
-    Entries = lists:map(fun tar_entry/1, MergedFsEntries),
-    ?DEBUG("Tar Entries: ~p~n", [Entries]),
-    erl_tar:create(Filename, Entries, Opts).
+    Prefix = proplists:get_value(prefix, Conf, Name),
+    Entries = [ tar_entry(E, Prefix) || E <- MergedFsEntries ],
+    case rebar_config:get_global(dryrun, false) of
+        false ->
+            erl_tar:create(Filename, Entries, Opts);
+        _ ->
+            print_assembly(Filename, Entries),
+            ok
+    end.
+
+print_assembly(Filename, Entries) ->
+    io:format("INFO:  [~p] ==> Create-Archive: ~s~n", [?MODULE, Filename]),
+    lists:map(fun print_entry/1, Entries).
+
+print_entry(E) ->
+    io:format("INFO:  [~p] ==> Archive-Entry: ~p~n", [?MODULE, E]).
 
 %% TODO: to write a directory into the tar with a different name, we will need
 %% to (recursively) copy it to a "work area" with the new name
 
 tar_entry(#entry{source=Src, target=Targ, data=undefined,
-                 info=#file_info{type=directory}}) when Src /= Targ ->
-    {Targ, Src};
-tar_entry(#entry{source=Src, target=undefined, data=undefined,
-                 info=#file_info{type=directory}}) ->
-    Src;
+                 info=#file_info{type=directory}}, Prefix) when Src /= Targ ->
+    {target(Prefix, Targ), Src};
+tar_entry(#entry{source=Src, info=#file_info{type=directory}}, Prefix) ->
+    target(Prefix, Src);
 tar_entry(#entry{source=Src, target=Targ, data=undefined,
-                 info=#file_info{type=regular}}) when Src == Targ ->
-    Src;
+                 info=#file_info{type=regular}}, Prefix) when Src == Targ ->
+    target(Prefix, Src);
 tar_entry(#entry{source=Src, target=Targ, data=undefined,
-                 info=#file_info{type=regular}}) when Src /= Targ ->
-    {Targ, Src};
-tar_entry(#entry{source=Src, target=Targ, data=Bin,
-                 info=#file_info{type=regular}}) when Src /= Targ andalso
-                                                      is_binary(Bin) ->
-    {Targ, Bin}.
+                 info=#file_info{type=regular}}, Prefix) when Src /= Targ ->
+    {target(Prefix, Targ), Src};
+tar_entry(#entry{source=Src, target=undefined, data=Bin,
+                 info=#file_info{type=regular}}, Prefix) when is_binary(Bin) ->
+    {target(Prefix, Src), Bin};
+tar_entry(#entry{target=Targ, data=Bin,
+                 info=#file_info{type=regular}}, Prefix) when is_binary(Bin) ->
+    {target(Prefix, Targ), Bin}.
 
-merge_entries(DirSpecs, FileSpecs, Opts) ->
-    CopyDirs = flatten_specs(DirSpecs),
-    CopyFiles = flatten_specs(FileSpecs),
-    ExtraFiles = [ output_def(S, F) || {S, F} <- CopyFiles,
-                           S#spec.template =/= true andalso
-                           not( lists:any(prefix_of(F), CopyDirs) ) ],
-    TemplatedFiles = [ {S, F} || {S, F} <- CopyFiles,
-                                 S#spec.template =:= true ],
-    ProcessedTemplates = merge_templates(TemplatedFiles, Opts),
-    FirstDirs = [ output_def(S, F) || {S, F} <- CopyDirs ],
-    lists:concat([FirstDirs, ExtraFiles, ProcessedTemplates]).
+target(Prefix, Thing) ->
+    filename:join(Prefix, Thing).
 
-output_def(Spec, {File, Data}) ->
-    output_def(Spec, File, Data);
-output_def(Spec, File) ->
-    output_def(Spec, File, undefined).
+output_def(Spec, {File, Data}, Pwd) ->
+    output_def(Spec, File, Data, Pwd);
+output_def(Spec, File, Pwd) ->
+    output_def(Spec, File, undefined, Pwd).
 
-output_def(Spec, File, Data) ->
+output_target(Entry, Base) ->
+    re:replace(Entry, Base ++ "/", "", [{return, list}]).
+
+output_def(Spec, File, Data, Pwd) ->
+    ?DEBUG("Creating Archive Entry for ~p~n", [File]),
     {ok, FI} = file:read_file_info(File),
     case Spec#spec.target of
-        undefined ->
-            #entry{spec=Spec, source=File,
-                   data=Data, target=File, info=FI};
-        '_' ->
-            #entry{spec=Spec, source=File,
-                   data=Data, target=File, info=FI};
+        None when None == undefined orelse None == '_' ->
+            NewTarget = output_target(File, Pwd),
+            #entry{spec=Spec, 
+                   source=File,
+                   data=Data, 
+                   target=NewTarget, 
+                   info=FI};
+        {name, Target} ->
+            case FI#file_info.type of
+                regular ->
+                    #entry{spec=Spec, source=File,
+                           data=Data, target=Target, info=FI};
+                _ ->
+                    #entry{spec=Spec, 
+                           source=File, 
+                           target=output_target(File, Pwd),
+                           info=FI}
+            end;
         Target ->
             case FI#file_info.type of
                 regular ->
@@ -241,14 +257,26 @@ output_def(Spec, File, Data) ->
                     #entry{spec=Spec, source=File,
                            data=Data, target=NewName, info=FI};
                 _ ->
-                    #entry{spec=Spec, source=File, target=File, info=FI}
+                    #entry{spec=Spec, 
+                           source=File, 
+                           target=output_target(File, Pwd),
+                           info=FI}
             end
     end.
 
-prefix_of(F) ->
-    fun(D) -> lists:prefix(D, F) end.
 
-merge_templates(TemplatedFiles, Opts) ->
+filter(Items, Excl) ->
+    Exclusions = [ E || {_, E} <- Excl ],
+    lists:filter(fun(I) -> should_include(I, Exclusions) end, Items).
+
+should_include({_, {Incl, _}}, Exclusions) ->
+    should_include(Incl, Exclusions);
+should_include({_, Incl}, Exclusions) when is_list(Incl) ->
+    should_include(Incl, Exclusions);
+should_include(Incl, Exclusions) ->
+    not lists:any(fun(Ex) -> lists:prefix(Ex, Incl) end, Exclusions).
+
+merge_templates(MaybeTemplates, Opts) ->
     Vars = case proplists:get_value(vars_file, Opts) of
         undefined ->
             dict:new();
@@ -260,52 +288,95 @@ merge_templates(TemplatedFiles, Opts) ->
                     dict:from_list(Terms)
             end
     end,
-    lists:map(fun(F) -> apply_template(F, Vars) end, TemplatedFiles).
+    lists:map(fun(F) -> apply_template(F, Vars) end, MaybeTemplates).
 
-apply_template({Spec, File}, Vars) ->
+apply_template({#spec{template=true}=Spec, File}, Vars) ->
     {ok, Bin} = file:read_file(File),
-    output_def(Spec, {File, rebar_templater:render(Bin, Vars)}).
-
-flatten_specs([]) ->
-    [];
-flatten_specs([{Spec, Items}|Rest]) ->
-    [{Spec, I} || I <- Items] ++ flatten_specs(Rest).
-
-filter({Spec, Incl}, Excl) ->
-    {In, Out} = lists:partition(fun(I) -> should_include(I, Excl) end, Incl),
-    ?DEBUG("Excluding ~p~n", [Out]),
-    {Spec, In}.
-
-should_include(Incl, Exclusions) ->
-    not lists:any(fun(Ex) -> lists:prefix(Ex, Incl) end, Exclusions).
-
-collect_dirs(Includes) ->
-    lists:map(fun process_dir/1, Includes).
-
-collect_files(Includes) ->
-    Cwd = rebar_utils:get_cwd(),
-    Dirs = lists:duplicate(length(Includes), Cwd),
-    lists:map(fun process_files/1, lists:zip(Dirs, Includes)).
+    {Spec, {File, list_to_binary(rebar_templater:render(Bin, Vars))}};
+apply_template(Entry, _) ->
+    Entry.
 
 %% TODO: handle *mode* by doing a(ny) chmod/chown/chgrp in a work directory
 
-%% TODO: unify process_files and process_dir
-%% TODO: rename process_dir => process_dirs
+merge_paths({_, {File, _Data}}=E, Acc) ->
+    merge_paths(File, Acc, E);
+merge_paths({_, File}=E, Acc) ->
+    merge_paths(File, Acc, E).
 
-process_files({_Dir, #spec{path=Path, glob=undefined}=Spec}) ->
-    {Spec, Path};
-process_files({Dir, #spec{glob=Glob}=Spec}) ->
-    Files = rebar_utils:find_files(Dir, Glob) ++ filelib:wildcard(Glob),
-    {Spec, Files};
-process_files({Dir, PathExpr}) when is_list(PathExpr) ->
-    process_files({Dir, #spec{glob=PathExpr}}).
+merge_paths(File, Acc, E) ->
+    case lists:keyfind(File, 2, Acc) of
+        false ->
+            [E|Acc];
+        _ ->
+            lists:keyreplace(File, 2, Acc, E)
+    end.
 
-process_dir(#spec{path=Path, glob=undefined}=Spec) ->
-    {Spec, Path};
-process_dir(#spec{glob=Glob}=Spec) ->
-    {Spec, filelib:wildcard(Glob)};
-process_dir(PathExpr) when is_list(PathExpr) ->
-    process_dir(#spec{glob=PathExpr}).
+flatten_entries([{Spec, [H|_]=Entry}|Rest]) when is_integer(H) ->
+    [{Spec, Entry}|flatten_entries(Rest)];
+flatten_entries([{Spec, [H|_]=Entries}|Rest]) when is_list(H) ->
+    [ {Spec, E} || E <- Entries ] ++ flatten_entries(Rest);
+flatten_entries([[H|_]=First|Rest]) when is_integer(H) ->
+    [First|flatten_entries(Rest)];
+flatten_entries([[H|T]|Rest]) when is_list(H) ->
+    lists:concat([[H], flatten_entries(T), flatten_entries(Rest)]);
+flatten_entries([]) ->
+    [].
+
+collect_dirs(Incl) ->
+    ?DEBUG("Collecting dirs matching ~p~n", [Incl]),
+    Dirs = collect_glob(fun process_dir/2, Incl),
+    flatten_entries(Dirs).
+
+collect_files(Incl) ->
+    ?DEBUG("Collecting files matching ~p~n", [Incl]),
+    collect_glob(fun process_files/2, Incl).
+
+collect_glob(Proc, Globs) ->
+    Cwd = rebar_utils:get_cwd(),
+    Dirs = lists:duplicate(length(Globs), Cwd),
+    {_MapAcc, FoldAcc} =
+        lists:foldl(process_glob(Proc), {[], []},
+                    lists:zip(Dirs, Globs)),
+    FoldAcc.
+
+process_files(Dir, Glob) ->
+    Files = rebar_utils:find_files(Dir, Glob) ++
+        [ filename:join(Dir, E) || E <- filelib:wildcard(Glob) ],
+    Files.
+
+process_dir(Dir, Glob) ->
+    Entries = [ filename:join(Dir, D) || D <- filelib:wildcard(Glob) ],
+    {Dirs, Files} = lists:partition(fun filelib:is_dir/1, Entries),
+    Found = lists:concat([[ process_dir(D) || D <- Dirs ], Files]),
+    Found.
+
+process_dir(Dir) ->
+    ?DEBUG("Processing dir ~p~n", [Dir]),
+    case file:list_dir(Dir) of
+        [] -> [];
+        {ok, Entries} ->
+            Paths = [filename:join(Dir, E) || E <- Entries],
+            {Dirs, Files} = lists:partition(fun filelib:is_dir/1, Paths),
+        flatten_entries(
+            [ E || E <- lists:concat([[ process_dir(D) || D <- Dirs ], Files]),
+                   not filelib:is_dir(E) ])
+    end.
+
+process_glob(Proc) ->
+    fun({Dir, #spec{path=Path, glob=undefined}=Spec}, {MapAcc, FoldAcc}) ->
+            no_duplicates(Spec, [filename:join(Dir, Path)], MapAcc, FoldAcc);
+       ({Dir, #spec{glob=Glob}=Spec}, {MapAcc, FoldAcc}) ->
+            no_duplicates(Spec, Proc(Dir, Glob), MapAcc, FoldAcc);
+       ({Dir, PathExpr}, {MapAcc, FoldAcc}) when is_list(PathExpr) ->
+            no_duplicates(glob(PathExpr), Proc(Dir, PathExpr),
+                          MapAcc, FoldAcc)
+    end.
+
+no_duplicates(Spec, Entries, SoFar, Result) ->
+    New = [ E || E <- Entries, not lists:member(E, SoFar) ],
+    Processed = lists:concat([New, SoFar]),
+    WithSpecs = lists:concat([[ {Spec, N} || N <- New ], Result]),
+    {Processed, WithSpecs}.
 
 ensure_path(Dir) ->
     rebar_utils:ensure_dir(Dir),
@@ -317,10 +388,15 @@ ensure_path(Dir) ->
     end,
     Dir.
 
+outdir(Opts) ->
+    proplists:get_value(outdir, Opts, "dist").
+
+basename() ->
+    filename:basename(rebar_utils:get_cwd()).
+
 find_assemblies(#conf{ base=Base, dist=DistConfig }) ->
     case lists:filter(fun(X) -> element(1, X) == assembly end, DistConfig) of
         [] ->
-            %% TODO: infer an assembly from *top level* config
             [#assembly{name=Base, opts=DistConfig}];
         Assemblies ->
             Assemblies
@@ -337,25 +413,22 @@ scope_config(AppFile, Config) ->
 
 merge_config(BaseConfig) ->
     case lists:keyfind(config, 1, BaseConfig) of
-        false ->
-            BaseConfig;
-        ConfigPath ->
+        {config, ConfigPath} ->
             case read_conf(ConfigPath) of
-               {ok, {dist, Terms}} ->
+               {ok, {dist, Terms}, _Path} ->
                    %% all non-assembly members are ignored
                    Assemblies = [ A || A <- Terms, element(1, A) =:= assembly ],
                    lists:foldl(fun merge_assemblies/2, BaseConfig, Assemblies);
                Other ->
                    ?WARN("Failed to load ~s: ~p\n", [ConfigPath, Other]),
                    BaseConfig
-           end
+            end;
+        _Other ->
+            BaseConfig
     end.
 
 merge_assemblies(E, Acc) ->
     lists:keyreplace(E#assembly.name, 2, Acc, E).
-
-basename() ->
-    filename:basename(rebar_utils:get_cwd()).
 
 read_conf(File) ->
     Bs = erl_eval:new_bindings(),
@@ -394,12 +467,12 @@ eval_stream2({error,What,EndLine}, Fd, H, Last, E, Bs) ->
     eval_stream(Fd, H, EndLine, Last, [What | E], Bs);
 eval_stream2({eof,EndLine}, _Fd, H, Last, E, _Bs) ->
     case {H, Last, E} of
-    {return, {Val}, []} ->
-        {ok, Val};
-    {return, undefined, E} ->
-        {error, hd(lists:reverse(E, [{EndLine,?MODULE,undefined_script}]))};
-    {ignore, _, []} ->
-        ok;
-    {_, _, [_|_] = E} ->
-        {error, hd(lists:reverse(E))}
+        {return, {Val}, []} ->
+            {ok, Val};
+        {return, undefined, E} ->
+            {error, hd(lists:reverse(E, [{EndLine,?MODULE,undefined_script}]))};
+        {ignore, _, []} ->
+            ok;
+        {_, _, [_|_] = E} ->
+            {error, hd(lists:reverse(E))}
     end.

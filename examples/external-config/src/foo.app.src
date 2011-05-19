@@ -1,0 +1,7 @@
+{application,foo,
+             [{description,"An app that does foo (bar)"},
+              {vsn,"1"},
+              {registered,[]},
+              {applications,[kernel,stdlib]},
+              {env,[]},
+              {modules,[foo]}]}.
