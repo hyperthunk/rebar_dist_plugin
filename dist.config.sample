@@ -1,8 +1,17 @@
 %% Sample dist.config demonstrating dist plugin configuration
 
-{assembly, mydist, [
-    {format, zip},
-    {outdir, "target"},
-    {workdir, "/tmp/dist/.work"},
-    {incl_files, ["bin/*.escript"]}
+{dist, [
+    {assembly, "foo", [
+        {format, tar},
+        {vars_file, "myvars.vars"},
+        {incl_files, [
+            template({glob, "\\.sh$"}, "priv"),
+            spec("src/foo.app.src", name("ebin/foo.app"))]},
+        {incl_dirs, ["ebin", "priv"]},
+        {excl_dirs, [glob("**/build")]},
+        {excl_files, [
+            glob("rebar_.*_plugin\\.beam$"),
+            glob("ebin/foo.app")]},
+        {version, "1.2.3"}
+    ]}
 ]}.
