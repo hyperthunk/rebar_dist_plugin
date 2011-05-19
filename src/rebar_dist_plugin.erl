@@ -177,7 +177,7 @@ write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
         _ ->
             [write, compressed]
     end,
-    Filename = filename:join(Outdir, Name) ++ ".tar.gz",
+    Filename = assembly_name(filename:join(Outdir, Name), ".tar.gz", Conf),
     %% -record(entry, {spec, source, target, data, info}).
     Prefix = proplists:get_value(prefix, Conf, Name),
     Entries = [ tar_entry(E, Prefix) || E <- MergedFsEntries ],
@@ -188,6 +188,24 @@ write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
             print_assembly(Filename, Entries),
             ok
     end.
+
+assembly_name(Path, Ext, Conf) ->
+    case proplists:get_value(version, Conf, undefined) of
+        undefined ->
+            Path ++ Ext;
+        {git, tag}=GitTag ->
+            Path ++ "-" ++ scm_version(GitTag) ++ Ext;
+        {scm, _}=ScmCmd ->
+            Path ++ "-" ++ scm_version(ScmCmd) ++ Ext;
+        Vsn when is_list(Vsn) ->
+            Path ++ "-" ++ Vsn ++ Ext
+    end.
+
+scm_version({git, tag}) ->
+    scm_version({scm, "git describe --abbrev=0"});
+scm_version({scm, Cmd}) ->
+    {ok, Vsn} = rebar_utils:sh(Cmd, []),
+    string:strip(Vsn, right, $\n).
 
 print_assembly(Filename, Entries) ->
     io:format("INFO:  [~p] ==> Create-Archive: ~s~n", [?MODULE, Filename]),
