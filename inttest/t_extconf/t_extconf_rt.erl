@@ -13,7 +13,7 @@ run(_Dir) ->
                                     [{dir, "external-config"}])),
     ?assertMatch({ok, _}, retest:sh("rebar cl comp dist -v",
                                     [{dir, "external-config"}])),
-    ?assertMatch({ok, _}, retest:sh("tar -zxf foo.tar.gz",
+    ?assertMatch({ok, _}, retest:sh("tar -zxf foo-1.2.3.tar.gz",
                                     [{dir, "external-config/dist"}])),
 
     ?assert(not exists("foo/priv/build/bar.sh")),
