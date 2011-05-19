@@ -15,7 +15,7 @@ given on the command line).
 Include the following tuple in your rebar deps:
 
 ```erlang
-{deps, [{'rebar-dist-plugin', ".*", {git,
+{deps, [{rebar_dist_plugin, ".*", {git,
     "git://github.com/hyperthunk/rebar-dist-plugin.git", "master"}}]}.
 ```
 
@@ -28,8 +28,7 @@ Alternatively, you may put the plugin into your `ERL_LIBS` path somewhere and
 use it in many projects. This can be done manually, or using a package manager:
 
     user@host$ epm install hyperthunk/rebar-dist-plugin  # or
-    user@host$ sutro install hyperthunk/rebar-dist-plugin  # or
-    user@host$ agner install rebar-dist-plugin
+    user@host$ sutro install hyperthunk/rebar-dist-plugin
 
 ## Usage
 
