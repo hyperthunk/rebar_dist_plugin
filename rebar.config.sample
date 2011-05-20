@@ -14,3 +14,19 @@
     {config, "dist.config"},
     {assembly, mydist}
 ]}.
+
+%% Using the built in assembly configuration(s)
+{dist, [
+    {assembly, release},  %% archives releases - (see rebar_rel_utils:is_rel_dir/1)
+    {assembly, project},  %% archives the current project (ebin + priv)
+    {assembly, sources},  %% archives the whole project directory *as is*
+    {assembly, doc}  %% archives the project's doc folder
+]}.
+
+%% Using the built in assembly configuration(s)
+{dist, [
+    {assembly, release},  %% archives releases - (see rebar_rel_utils:is_rel_dir/1)
+    {assembly, project},  %% archives the current project (ebin + priv)
+    {assembly, sources},  %% archives the whole project directory *as is*
+    {assembly, doc}  %% archives the project's doc folder
+]}.

@@ -40,11 +40,13 @@
 -module(rebar_dist_plugin).
 
 -include_lib("kernel/include/file.hrl").
+-compile(export_all).
 -export([dist/2, distclean/2]).
 -export([generate/2, clean/2]).
 
 -export([glob/1, spec/2, name/1]).
 -export([template/1, template/2]).
+-export([fnmatch/1, fnmatch/2]).
 
 -define(DEBUG(Msg, Args),
     rebar_log:log(debug, "[~p] " ++ Msg, [?MODULE|Args])).
@@ -93,6 +95,7 @@ clean(Config, AppFile) ->
     end.
 
 dist(Conf) ->
+    ?DEBUG("Conf: ~p~n", [Conf]),
     Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
     Errors = [R || R <- Results, R =/= ok],
     case (length(Errors) > 0) of
@@ -126,6 +129,12 @@ spec(Path, Target) ->
 
 name(Target) ->
     {name, Target}.
+
+fnmatch(Fun) when is_function(Fun, 1) ->
+    #spec{glob={fnmatch, Fun}}.
+
+fnmatch(Fun, Target) when is_function(Fun, 1) ->
+    #spec{glob={fnmatch, Fun}, target=Target}.
 
 %%spec(Glob, Mode, Owner, Group) ->
 %%    #spec{glob=Glob, mode={Mode, Owner, Group}}.
@@ -252,10 +261,10 @@ output_def(Spec, File, Data, Pwd) ->
     case Spec#spec.target of
         None when None == undefined orelse None == '_' ->
             NewTarget = output_target(File, Pwd),
-            #entry{spec=Spec, 
+            #entry{spec=Spec,
                    source=File,
-                   data=Data, 
-                   target=NewTarget, 
+                   data=Data,
+                   target=NewTarget,
                    info=FI};
         {name, Target} ->
             case FI#file_info.type of
@@ -263,11 +272,13 @@ output_def(Spec, File, Data, Pwd) ->
                     #entry{spec=Spec, source=File,
                            data=Data, target=Target, info=FI};
                 _ ->
-                    #entry{spec=Spec, 
-                           source=File, 
+                    #entry{spec=Spec,
+                           source=File,
                            target=output_target(File, Pwd),
                            info=FI}
             end;
+        NameGen when is_function(NameGen) ->
+            output_def(Spec#spec{target=NameGen(File)}, File, Data, Pwd);
         Target ->
             case FI#file_info.type of
                 regular ->
@@ -275,8 +286,8 @@ output_def(Spec, File, Data, Pwd) ->
                     #entry{spec=Spec, source=File,
                            data=Data, target=NewName, info=FI};
                 _ ->
-                    #entry{spec=Spec, 
-                           source=File, 
+                    #entry{spec=Spec,
+                           source=File,
                            target=output_target(File, Pwd),
                            info=FI}
             end
@@ -362,11 +373,25 @@ process_files(Dir, Glob) ->
         [ filename:join(Dir, E) || E <- filelib:wildcard(Glob) ],
     Files.
 
+process_dir(Dir, {fnmatch, Glob}) ->
+    case file:list_dir(Dir) of
+        [] -> [];
+        {ok, Entries} ->
+            lists:filter(glob_filter(Glob), Entries)
+    end;
 process_dir(Dir, Glob) ->
     Entries = [ filename:join(Dir, D) || D <- filelib:wildcard(Glob) ],
     {Dirs, Files} = lists:partition(fun filelib:is_dir/1, Entries),
     Found = lists:concat([[ process_dir(D) || D <- Dirs ], Files]),
     Found.
+
+glob_filter(Glob) when is_function(Glob) ->
+    fun(D) ->
+        case Glob(D) of
+           {true, _} -> true;
+           _ -> false
+        end
+    end.
 
 process_dir(Dir) ->
     ?DEBUG("Processing dir ~p~n", [Dir]),
@@ -467,6 +492,11 @@ read_conf(File) ->
 config_fn_handler(Name, Arguments) ->
     apply(?MODULE, Name, Arguments).
 
+ext_config_fn_handler(Func, Args) when is_function(Func) ->
+    Func(Args);
+ext_config_fn_handler({Mod, Func}, Args) ->
+    apply(Mod, Func, Args).
+
 eval_stream(Fd, Handling, Bs) ->
     eval_stream(Fd, Handling, 1, undefined, [], Bs).
 
@@ -474,7 +504,8 @@ eval_stream(Fd, H, Line, Last, E, Bs) ->
     eval_stream2(io:parse_erl_exprs(Fd, '', Line), Fd, H, Last, E, Bs).
 
 eval_stream2({ok,Form,EndLine}, Fd, H, Last, E, Bs0) ->
-    try erl_eval:exprs(Form, Bs0, {value, fun config_fn_handler/2}) of
+    try erl_eval:exprs(Form, Bs0, {value, fun config_fn_handler/2},
+                                  {value, fun ext_config_fn_handler/2}) of
         {value,V,Bs} ->
             eval_stream(Fd, H, EndLine, {V}, E, Bs)
     catch Class:Reason ->

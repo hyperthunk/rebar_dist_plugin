@@ -1,11 +1,7 @@
-{application, rebar_dist_plugin,
- [
-  {description, "Rebar Dist Plugin"},
-  {vsn, git},
-  {registered, []},
-  {applications, [
-                  kernel,
-                  stdlib
-                 ]},
-  {env, []}
- ]}.
+{application, rebar_dist_plugin, [
+    {description, "Rebar Dist Plugin"},
+    {vsn, git},
+    {registered, []},
+    {applications, [kernel,stdlib]},
+    {env, []}
+]}.
