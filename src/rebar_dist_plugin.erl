@@ -41,12 +41,9 @@
 
 -include_lib("kernel/include/file.hrl").
 -compile(export_all).
--export([dist/2, distclean/2]).
--export([generate/2, clean/2]).
 
--export([glob/1, spec/2, name/1]).
--export([template/1, template/2]).
--export([fnmatch/1, fnmatch/2]).
+-export([dist/2, distclean/2]).
+-export([post_generate/2, post_clean/2]).
 
 -define(DEBUG(Msg, Args),
     rebar_log:log(debug, "[~p] " ++ Msg, [?MODULE|Args])).
@@ -65,42 +62,41 @@
 
 dist(Config, AppFile) ->
     %% AppName will be the default output filename
-    rebar_config:set_global(skip_deps, 1),
-    {App, DistConfig} = scope_config(AppFile, Config),
-    dist(#conf{ base=App, rebar=Config, dist=DistConfig }).
+    run(fun() ->
+        rebar_config:set_global(skip_deps, 1),
+        {App, DistConfig} = scope_config(AppFile, Config),
+        dist(#conf{ base=App, rebar=Config, dist=DistConfig })
+    end).
 
 distclean(Config, AppFile) ->
-    {_, DistConfig} = scope_config(AppFile, Config),
-    Outdir = outdir(DistConfig),
-    rebar_file_utils:rm_rf(Outdir).
+    run(fun() ->
+        {_, DistConfig} = scope_config(AppFile, Config),
+        Outdir = outdir(DistConfig),
+        rebar_file_utils:rm_rf(Outdir)
+    end).
 
-generate(Config, AppFile) ->
-    rebar_log:log(debug, "Dist Plugin `generate' ~p~n", [Config]),
-    Attach = rebar_config:get_local(Config, attach, []),
+%% TODO: switch these to run post_generate and post_clean
+
+post_generate(Config, AppFile) ->
+    DistConfig = rebar_config:get(Config, dist, []),
+    Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(generate, Attach) of
         true ->
+            rebar_log:log(debug,
+                "Running Dist Plugin `generate' Hook ~p~n", [Config]),
             dist(Config, AppFile);
         false ->
             ok
     end.
 
-clean(Config, AppFile) ->
-    rebar_log:log(debug, "Dist Plugin `generate' ~p~n", [Config]),
-    Attach = rebar_config:get_local(Config, attach, []),
+post_clean(Config, AppFile) ->
+    DistConfig = rebar_config:get(Config, dist, []),
+    Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(clean, Attach) of
         true ->
+            rebar_log:log(debug,
+                "Running Dist Plugin `clean' Hook ~p~n", [Config]),
             distclean(Config, AppFile);
-        false ->
-            ok
-    end.
-
-dist(Conf) ->
-    ?DEBUG("Conf: ~p~n", [Conf]),
-    Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
-    Errors = [R || R <- Results, R =/= ok],
-    case (length(Errors) > 0) of
-        true ->
-            {error, Errors};
         false ->
             ok
     end.
@@ -130,23 +126,70 @@ spec(Path, Target) ->
 name(Target) ->
     {name, Target}.
 
+is_rel_dir(Dir) ->
+    case get(reldir) of
+        Dir ->
+            true;
+        _ ->
+            IsRelDir = rebar_rel_utils:is_rel_dir(Dir),
+            case IsRelDir of
+                {true, _} ->
+                    put(reldir, Dir ++ "/"),
+                    true;
+                _ -> 
+                    Basename = filename:dirname(Dir),
+                    case Basename of
+                        Dir ->
+                            false;
+                        ParentDir ->
+                            case rebar_utils:get_cwd() == ParentDir of
+                                true ->
+                                    false;
+                                _ ->
+                                    is_rel_dir(ParentDir)
+                            end
+                    end
+            end
+    end.
+
+reldir() ->
+    get(reldir).
+
+basedir() ->
+    get(basedir).
+
+basename() ->
+    filename:basename(rebar_utils:get_cwd()).
+
 fnmatch(Fun) when is_function(Fun, 1) ->
     #spec{glob={fnmatch, Fun}}.
 
 fnmatch(Fun, Target) when is_function(Fun, 1) ->
     #spec{glob={fnmatch, Fun}, target=Target}.
 
-%%spec(Glob, Mode, Owner, Group) ->
-%%    #spec{glob=Glob, mode={Mode, Owner, Group}}.
-
-%%spec(Glob, Target, Mode, Owner, Group) ->
-%%    #spec{glob=Glob, target=Target, mode={Mode, Owner, Group}}.
-
-
-
 %%
 %% Internal API
 %%
+
+run(Func) ->
+    case rebar_rel_utils:is_rel_dir() of
+        {true, _} ->
+            ok;
+        _ ->
+            put(basedir, rebar_utils:get_cwd() ++ "/"),
+            Func()
+    end.
+
+dist(Conf) ->
+    ?DEBUG("Conf: ~p~n", [Conf]),
+    Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
+    Errors = [R || R <- Results, R =/= ok],
+    case (length(Errors) > 0) of
+        true ->
+            {error, Errors};
+        false ->
+            ok
+    end.
 
 process_assembly(#assembly{name=Name, opts=Opts}) ->
     Format = proplists:get_value(format, Opts, tar),
@@ -175,7 +218,6 @@ write_assembly(zip, Name, Outdir, MergedFsEntries, _Conf) ->
     end,
     Filename = filename:join(Outdir, Name) ++ ".zip",
     Result = zip:create(Filename, MergedFsEntries, Opts),
-    %% TODO: reconstruct the template entries in memory before writing to disk
     ?DEBUG("Result: ~p~n", [Result]),
     Result;
 write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
@@ -187,7 +229,6 @@ write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
             [write, compressed]
     end,
     Filename = assembly_name(filename:join(Outdir, Name), ".tar.gz", Conf),
-    %% -record(entry, {spec, source, target, data, info}).
     Prefix = proplists:get_value(prefix, Conf, Name),
     Entries = [ tar_entry(E, Prefix) || E <- MergedFsEntries ],
     case rebar_config:get_global(dryrun, false) of
@@ -348,16 +389,16 @@ flatten_entries([[H|_]=First|Rest]) when is_integer(H) ->
     [First|flatten_entries(Rest)];
 flatten_entries([[H|T]|Rest]) when is_list(H) ->
     lists:concat([[H], flatten_entries(T), flatten_entries(Rest)]);
+flatten_entries([[]|Rest]) ->
+    flatten_entries(Rest);
 flatten_entries([]) ->
     [].
 
 collect_dirs(Incl) ->
-    ?DEBUG("Collecting dirs matching ~p~n", [Incl]),
     Dirs = collect_glob(fun process_dir/2, Incl),
     flatten_entries(Dirs).
 
 collect_files(Incl) ->
-    ?DEBUG("Collecting files matching ~p~n", [Incl]),
     collect_glob(fun process_files/2, Incl).
 
 collect_glob(Proc, Globs) ->
@@ -377,7 +418,11 @@ process_dir(Dir, {fnmatch, Glob}) ->
     case file:list_dir(Dir) of
         [] -> [];
         {ok, Entries} ->
-            lists:filter(glob_filter(Glob), Entries)
+            Paths = [ filename:join(Dir, E) || E <- Entries ],
+            {Dirs, Files} = lists:partition(fun filelib:is_dir/1,
+                                lists:filter(glob_filter(Glob), Paths)),
+            Found = lists:concat([[ process_dir(D) || D <- Dirs ], Files]),
+            lists:filter(glob_filter(Glob), Found)
     end;
 process_dir(Dir, Glob) ->
     Entries = [ filename:join(Dir, D) || D <- filelib:wildcard(Glob) ],
@@ -388,13 +433,13 @@ process_dir(Dir, Glob) ->
 glob_filter(Glob) when is_function(Glob) ->
     fun(D) ->
         case Glob(D) of
-           {true, _} -> true;
-           _ -> false
+            true -> true;
+            {true, _} -> true;
+            _ -> false
         end
     end.
 
 process_dir(Dir) ->
-    ?DEBUG("Processing dir ~p~n", [Dir]),
     case file:list_dir(Dir) of
         [] -> [];
         {ok, Entries} ->
@@ -434,9 +479,6 @@ ensure_path(Dir) ->
 outdir(Opts) ->
     proplists:get_value(outdir, Opts, "dist").
 
-basename() ->
-    filename:basename(rebar_utils:get_cwd()).
-
 find_assemblies(#conf{ base=Base, dist=DistConfig }) ->
     case lists:filter(fun(X) -> element(1, X) == assembly end, DistConfig) of
         [] ->
@@ -455,21 +497,60 @@ scope_config(AppFile, Config) ->
     {App, [{app, App}|merge_config(BaseConfig)]}.
 
 merge_config(BaseConfig) ->
-    case lists:keyfind(config, 1, BaseConfig) of
+    NewBase = case lists:keyfind(config, 1, BaseConfig) of
         {config, ConfigPath} ->
-            case read_conf(ConfigPath) of
-               {ok, {dist, Terms}, _Path} ->
-                   %% all non-assembly members are ignored
-                   Assemblies = [ A || A <- Terms, element(1, A) =:= assembly ],
-                   lists:foldl(fun merge_assemblies/2, BaseConfig, Assemblies);
-               Other ->
-                   ?WARN("Failed to load ~s: ~p\n", [ConfigPath, Other]),
-                   BaseConfig
+            case load_assembly(ConfigPath, assembly_merge(BaseConfig)) of
+                {ok, Assemblies} ->
+                    Assemblies;
+                {error, Other} ->
+                    ?WARN("Failed to load ~s: ~p\n", [ConfigPath, Other]),
+                    BaseConfig
             end;
         _Other ->
             BaseConfig
+    end,
+    (assembly_merge(NewBase))(base_assemblies()).
+
+base_assemblies() ->
+    Dir = filename:join(code:priv_dir(rebar_dist_plugin), "assemblies"),
+    ?DEBUG("Loading pre-defined assemblies from ~s~n", [Dir]),
+    case file:list_dir(Dir) of
+        {ok, Dirs} ->
+            Bases = [ list_to_atom(filename:basename(D, ".config")) || D <- Dirs ],
+            Assemblies = lists:concat(lists:map(fun load_assembly/1,
+                                [ filename:join(Dir, P) || P <- Dirs ])),
+            lists:zip(Bases, Assemblies);
+        _ ->
+            []
     end.
 
+assembly_merge(BaseConfig) ->
+    fun(Assemblies) ->
+        lists:foldl(fun merge_assemblies/2, BaseConfig, Assemblies)
+    end.
+
+load_assembly(ConfigPath) ->
+    case load_assembly(ConfigPath, fun(X) -> X end) of
+        {ok, Assembly} when is_tuple(Assembly) ->
+            [Assembly];
+        {ok, Assemblies} when is_list(Assemblies) ->
+            Assemblies;
+        {error, _Other} ->
+            []
+    end.
+
+load_assembly(ConfigPath, Loader) ->
+    case read_conf(ConfigPath) of
+        {ok, {dist, Terms}, _Path} ->
+            Assemblies = [ A || A <- Terms, element(1, A) =:= assembly ],
+            {ok, Loader(Assemblies)};
+        Other ->
+            ?WARN("Config Load Error: ~p~n", [Other]),
+            {error, Other}
+    end.
+
+merge_assemblies({Name, E}, Acc) when is_atom(Name) ->
+    lists:keyreplace(Name, 2, Acc, E);
 merge_assemblies(E, Acc) ->
     lists:keyreplace(E#assembly.name, 2, Acc, E).
 
