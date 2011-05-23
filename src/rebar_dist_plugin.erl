@@ -43,7 +43,7 @@
 -compile(export_all).
 
 -export([dist/2, distclean/2]).
--export([post_generate/2, post_clean/2]).
+-export([generate/2, clean/2]).
 
 -define(DEBUG(Msg, Args),
     rebar_log:log(debug, "[~p] " ++ Msg, [?MODULE|Args])).
@@ -77,7 +77,7 @@ distclean(Config, AppFile) ->
 
 %% TODO: switch these to run post_generate and post_clean
 
-post_generate(Config, AppFile) ->
+generate(Config, AppFile) ->
     DistConfig = rebar_config:get(Config, dist, []),
     Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(generate, Attach) of
@@ -89,7 +89,7 @@ post_generate(Config, AppFile) ->
             ok
     end.
 
-post_clean(Config, AppFile) ->
+clean(Config, AppFile) ->
     DistConfig = rebar_config:get(Config, dist, []),
     Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(clean, Attach) of
