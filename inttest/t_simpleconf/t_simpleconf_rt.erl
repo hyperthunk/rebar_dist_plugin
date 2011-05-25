@@ -10,7 +10,7 @@ files() ->
      {copy, "rebar.config", "custom-assembly/rebar.config"}].
 
 run(Dir) ->
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps check-deps compile -v",
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps -v",
                                     [{dir, "custom-assembly"}])),
     ?assertMatch({ok, _}, retest:sh("rebar escriptize dist -v",
                                     [{dir, "custom-assembly"}])),

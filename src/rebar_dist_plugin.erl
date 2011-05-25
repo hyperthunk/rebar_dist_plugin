@@ -63,7 +63,6 @@
 dist(Config, AppFile) ->
     %% AppName will be the default output filename
     run(fun() ->
-        rebar_config:set_global(skip_deps, 1),
         {App, DistConfig} = scope_config(AppFile, Config),
         dist(#conf{ base=App, rebar=Config, dist=DistConfig })
     end).
@@ -127,33 +126,20 @@ name(Target) ->
     {name, Target}.
 
 is_rel_dir(Dir) ->
-    case get(reldir) of
-        Dir ->
-            true;
-        _ ->
-            IsRelDir = rebar_rel_utils:is_rel_dir(Dir),
-            case IsRelDir of
-                {true, _} ->
-                    put(reldir, Dir ++ "/"),
-                    true;
-                _ -> 
-                    Basename = filename:dirname(Dir),
-                    case Basename of
-                        Dir ->
-                            false;
-                        ParentDir ->
-                            case rebar_utils:get_cwd() == ParentDir of
-                                true ->
-                                    false;
-                                _ ->
-                                    is_rel_dir(ParentDir)
-                            end
-                    end
-            end
-    end.
+    get(reldir) == Dir.
 
 reldir() ->
     get(reldir).
+
+relvsn() ->
+    Dir = reldir(),
+    Conf = filename:join(Dir, "reltool.config"),
+    case release_vsn(Conf) of
+        {_Name, Ver} ->
+            Ver;
+        _ ->
+            undefined
+    end.
 
 basedir() ->
     get(basedir).
@@ -174,6 +160,7 @@ fnmatch(Fun, Target) when is_function(Fun, 1) ->
 run(Func) ->
     case rebar_rel_utils:is_rel_dir() of
         {true, _} ->
+            put(reldir, rebar_utils:get_cwd() ++ "/"),
             ok;
         _ ->
             put(basedir, rebar_utils:get_cwd() ++ "/"),
@@ -181,7 +168,6 @@ run(Func) ->
     end.
 
 dist(Conf) ->
-    ?DEBUG("Conf: ~p~n", [Conf]),
     Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
     Errors = [R || R <- Results, R =/= ok],
     case (length(Errors) > 0) of
@@ -250,6 +236,9 @@ assembly_name(Path, Ext, Conf) ->
         Vsn when is_list(Vsn) ->
             Path ++ "-" ++ Vsn ++ Ext
     end.
+
+release_vsn(File) ->
+    catch(rebar_rel_utils:get_reltool_release_info(File)).
 
 scm_version({git, tag}) ->
     scm_version({scm, "git describe --abbrev=0"});
@@ -402,6 +391,7 @@ collect_files(Incl) ->
     collect_glob(fun process_files/2, Incl).
 
 collect_glob(Proc, Globs) ->
+    ?DEBUG("Searching for ~p~n", [Globs]),
     Cwd = rebar_utils:get_cwd(),
     Dirs = lists:duplicate(length(Globs), Cwd),
     {_MapAcc, FoldAcc} =

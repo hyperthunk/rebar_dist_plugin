@@ -6,13 +6,20 @@
 
 files() ->
     [{copy,
-        "../../examples/release-tarball", "release-tarball"},
+        "../../examples/release-tarball/rel", "release-tarball/rel"},
+     {copy,
+        "../../examples/release-tarball/src", "release-tarball/src"},
+     {copy,
+        "../../examples/release-tarball/myvars.vars", "release-tarball/myvars.vars"},
+     {copy,
+        "../../examples/release-tarball/rebar.config", "release-tarball/rebar.config"},
      {copy, "rebar.config", "release-tarball/rebar.config"}].
 
 run(_Dir) ->
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps check-deps compile-deps -v",
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps -v && "
+                                    "rm -dr deps/rebar_dist_plugin/examples",
                                  [{dir, "release-tarball"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar cl comp dist -v",
+    ?assertMatch({ok, _}, retest:sh("rebar cl comp generate dist -v",
                                  [{dir, "release-tarball"}])),
     ?assertMatch({ok, _}, retest:sh("tar -zxf foo-1.2.3.tar.gz",
                                  [{dir, "release-tarball/dist"}])),
