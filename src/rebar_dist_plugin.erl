@@ -45,6 +45,8 @@
 -export([dist/2, distclean/2]).
 -export([generate/2, clean/2]).
 
+-compile(export_all).
+
 -define(DEBUG(Msg, Args),
     rebar_log:log(debug, "[~p] " ++ Msg, [?MODULE|Args])).
 
@@ -126,18 +128,29 @@ name(Target) ->
     {name, Target}.
 
 is_rel_dir(Dir) ->
-    get(reldir) == Dir.
+    case get(reldir) of
+        undefined ->
+            ?DEBUG("Unable to check ~p as reldir is undefined~n", [Dir]),
+            false;
+        Path ->
+            [$/|Other] = lists:reverse(Path),
+            RelDir = lists:reverse(Other),
+            ?DEBUG("is ~s a prefix of ~p? ~p~n", [RelDir, Dir, lists:prefix(RelDir, Dir)]),
+            lists:prefix(RelDir, Dir)
+    end.
 
 reldir() ->
     get(reldir).
 
 relvsn() ->
     Dir = reldir(),
-    Conf = filename:join(Dir, "reltool.config"),
-    case release_vsn(Conf) of
+    ?DEBUG("Checking for reltool.config in ~p~n", [Dir]),
+    case catch(release_vsn(Dir)) of
         {_Name, Ver} ->
+            ?DEBUG("Found version ~p~n", [Ver]),
             Ver;
-        _ ->
+        Other ->
+            ?WARN("Bad release_vsn? ~p~n", [Other]),
             undefined
     end.
 
@@ -145,7 +158,19 @@ basedir() ->
     get(basedir).
 
 basename() ->
-    filename:basename(rebar_utils:get_cwd()).
+    basename(reldir()).
+
+basename(undefined) ->
+    ?WARN("No release_dir? ~n", []),
+    filename:basename(rebar_utils:get_cwd());
+basename(RelDir) ->
+    case release_vsn(RelDir) of
+        {Name, _Ver} ->
+            Name;
+        Other ->
+            ?WARN("Bad release_vsn? ~p~n", [Other]),
+            basename(undefined)
+    end.
 
 fnmatch(Fun) when is_function(Fun, 1) ->
     #spec{glob={fnmatch, Fun}}.
@@ -160,9 +185,11 @@ fnmatch(Fun, Target) when is_function(Fun, 1) ->
 run(Func) ->
     case rebar_rel_utils:is_rel_dir() of
         {true, _} ->
+            io:format("Setting reldir to ~s~n", [rebar_utils:get_cwd()]),
             put(reldir, rebar_utils:get_cwd() ++ "/"),
             ok;
         _ ->
+            io:format("Setting basedir to ~s~n", [rebar_utils:get_cwd()]),
             put(basedir, rebar_utils:get_cwd() ++ "/"),
             Func()
     end.
@@ -196,30 +223,17 @@ process_assembly(#assembly{name=Name, opts=Opts}) ->
 
 write_assembly(zip, Name, Outdir, MergedFsEntries, _Conf) ->
     ensure_path(Outdir),
-    Opts = case rebar_config:is_verbose() of
-        true ->
-            [verbose];
-        _ ->
-            []
-    end,
     Filename = filename:join(Outdir, Name) ++ ".zip",
-    Result = zip:create(Filename, MergedFsEntries, Opts),
-    ?DEBUG("Result: ~p~n", [Result]),
+    Result = zip:create(Filename, MergedFsEntries, []),
     Result;
 write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
     ensure_path(Outdir),
-    Opts = case rebar_config:is_verbose() of
-        true ->
-            [write, compressed, verbose];
-        _ ->
-            [write, compressed]
-    end,
     Filename = assembly_name(filename:join(Outdir, Name), ".tar.gz", Conf),
     Prefix = proplists:get_value(prefix, Conf, Name),
     Entries = [ tar_entry(E, Prefix) || E <- MergedFsEntries ],
     case rebar_config:get_global(dryrun, false) of
         false ->
-            erl_tar:create(Filename, Entries, Opts);
+            erl_tar:create(Filename, Entries, [write, compressed]);
         _ ->
             print_assembly(Filename, Entries),
             ok
@@ -237,8 +251,16 @@ assembly_name(Path, Ext, Conf) ->
             Path ++ "-" ++ Vsn ++ Ext
     end.
 
-release_vsn(File) ->
-    catch(rebar_rel_utils:get_reltool_release_info(File)).
+release_vsn(undefined) ->
+    "";
+release_vsn(Dir) ->
+    File = filename:join(Dir, "reltool.config"),
+    case filelib:is_regular(File) of
+        true ->
+            rebar_rel_utils:get_reltool_release_info(File);
+        _ ->
+            ""
+    end.
 
 scm_version({git, tag}) ->
     scm_version({scm, "git describe --abbrev=0"});
@@ -286,7 +308,6 @@ output_target(Entry, Base) ->
     re:replace(Entry, Base ++ "/", "", [{return, list}]).
 
 output_def(Spec, File, Data, Pwd) ->
-    ?DEBUG("Creating Archive Entry for ~p~n", [File]),
     {ok, FI} = file:read_file_info(File),
     case Spec#spec.target of
         None when None == undefined orelse None == '_' ->
@@ -308,7 +329,8 @@ output_def(Spec, File, Data, Pwd) ->
                            info=FI}
             end;
         NameGen when is_function(NameGen) ->
-            output_def(Spec#spec{target=NameGen(File)}, File, Data, Pwd);
+            NewName = NameGen(File),
+            output_def(Spec#spec{target={name, NewName}}, File, Data, Pwd);
         Target ->
             case FI#file_info.type of
                 regular ->
@@ -412,7 +434,7 @@ process_dir(Dir, {fnmatch, Glob}) ->
             {Dirs, Files} = lists:partition(fun filelib:is_dir/1,
                                 lists:filter(glob_filter(Glob), Paths)),
             Found = lists:concat([[ process_dir(D) || D <- Dirs ], Files]),
-            lists:filter(glob_filter(Glob), Found)
+            lists:filter(glob_filter(Glob), flatten_entries(Found))
     end;
 process_dir(Dir, Glob) ->
     Entries = [ filename:join(Dir, D) || D <- filelib:wildcard(Glob) ],
@@ -499,17 +521,18 @@ merge_config(BaseConfig) ->
         _Other ->
             BaseConfig
     end,
-    (assembly_merge(NewBase))(base_assemblies()).
+    (assembly_merge(NewBase))(base_assemblies(NewBase)).
 
-base_assemblies() ->
+base_assemblies(ReferencedAssemblies) ->
     Dir = filename:join(code:priv_dir(rebar_dist_plugin), "assemblies"),
     ?DEBUG("Loading pre-defined assemblies from ~s~n", [Dir]),
     case file:list_dir(Dir) of
         {ok, Dirs} ->
             Bases = [ list_to_atom(filename:basename(D, ".config")) || D <- Dirs ],
             Assemblies = lists:concat(lists:map(fun load_assembly/1,
-                                [ filename:join(Dir, P) || P <- Dirs ])),
-            lists:zip(Bases, Assemblies);
+                                    [ filename:join(Dir, P) || P <- Dirs ])),
+            [ {Assembly, Data} || {Assembly, Data} <- lists:zip(Bases, Assemblies),
+                                  lists:keymember(Assembly, 2, ReferencedAssemblies) ];
         _ ->
             []
     end.

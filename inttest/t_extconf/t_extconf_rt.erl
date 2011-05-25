@@ -9,9 +9,15 @@ files() ->
      {copy, "rebar.config", "external-config/rebar.config"}].
 
 run(_Dir) ->
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps check-deps compile -v",
+    Verbose = case rebar_config:is_verbose() of
+        true -> 
+            "-v";
+        _ ->
+            ""
+    end,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps " ++ Verbose,
                                     [{dir, "external-config"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar cl comp dist -v",
+    ?assertMatch({ok, _}, retest:sh("rebar cl comp dist " ++ Verbose,
                                     [{dir, "external-config"}])),
     ?assertMatch({ok, _}, retest:sh("tar -zxf foo-1.2.3.tar.gz",
                                     [{dir, "external-config/dist"}])),
@@ -25,7 +31,7 @@ run(_Dir) ->
     ?assert(filelib:is_regular(Script)),
     ?assert(file_contains_data(Script, "this is a template variable => BAZ")),
 
-    ?assertMatch({ok, _}, retest:sh("rebar distclean -v",
+    ?assertMatch({ok, _}, retest:sh("rebar distclean " ++ Verbose,
                                     [{dir, "external-config"}])),
     ?assert(filelib:is_dir("external-config/dist") == false),
     ok.

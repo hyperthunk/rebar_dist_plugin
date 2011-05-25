@@ -6,28 +6,30 @@
 
 files() ->
     [{copy,
-        "../../examples/release-tarball/rel", "release-tarball/rel"},
-     {copy,
-        "../../examples/release-tarball/src", "release-tarball/src"},
-     {copy,
-        "../../examples/release-tarball/myvars.vars", "release-tarball/myvars.vars"},
-     {copy,
-        "../../examples/release-tarball/rebar.config", "release-tarball/rebar.config"},
+        "../../examples/release-tarball", "release-tarball"},
      {copy, "rebar.config", "release-tarball/rebar.config"}].
 
 run(_Dir) ->
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps -v && "
-                                    "rm -dr deps/rebar_dist_plugin/examples",
+    Verbose = case rebar_config:is_verbose() of
+        true -> 
+            "-v";
+        _ ->
+            ""
+    end,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps " ++ Verbose,
                                  [{dir, "release-tarball"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar cl comp generate dist -v",
+    ?assertMatch({ok, _}, retest:sh("rebar compile-deps " ++ Verbose,
+                             [{dir, "release-tarball"}])),
+    ?assertMatch({ok, _}, retest:sh("rebar cl comp generate",
                                  [{dir, "release-tarball"}])),
-    ?assertMatch({ok, _}, retest:sh("tar -zxf foo-1.2.3.tar.gz",
+    ?assertMatch({ok, _}, retest:sh("rebar dist " ++ Verbose,
+                                 [{dir, "release-tarball"}])),
+    ?assertMatch({ok, _}, retest:sh("tar -zxf exemplar-1.2.3.tar.gz",
                                  [{dir, "release-tarball/dist"}])),
-
     ?assert(exists("exemplar/bin/exemplar")),
     ?assert(exists("exemplar/etc/app.config")),
-    ?assert(exists("exemplar/releases/1/exemplar.rel")),
-    ?assertMatch({ok, _}, retest:sh("rebar distclean -v",
+    ?assert(exists("exemplar/releases/1.2.3/exemplar.rel")),
+    ?assertMatch({ok, _}, retest:sh("rebar distclean " ++ Verbose,
                                  [{dir, "release-tarball"}])),
     ?assert(not exists("exemplar")),
     ok.

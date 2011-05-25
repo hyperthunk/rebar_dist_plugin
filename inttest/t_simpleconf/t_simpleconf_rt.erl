@@ -10,16 +10,22 @@ files() ->
      {copy, "rebar.config", "custom-assembly/rebar.config"}].
 
 run(Dir) ->
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps -v",
+    Verbose = case rebar_config:is_verbose() of
+        true -> 
+            "-v";
+        _ ->
+            ""
+    end,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps " ++ Verbose,
                                     [{dir, "custom-assembly"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar escriptize dist -v",
+    ?assertMatch({ok, _}, retest:sh("rebar escriptize dist " ++ Verbose,
                                     [{dir, "custom-assembly"}])),
     ?assertMatch({ok, _}, retest:sh("tar -zxf custom_app.tar.gz",
                                     [{dir, "custom-assembly/target"}])),
     File = filename:join(Dir, "custom-assembly/target/custom_app/priv/bin/custom-app"),
     retest_log:log(debug, "Checking File: ~p~n", [File]),
     ?assert(filelib:is_regular(File)),
-    ?assertMatch({ok, _}, retest:sh("rebar distclean -v",
+    ?assertMatch({ok, _}, retest:sh("rebar distclean " ++ Verbose,
                                     [{dir, "custom-assembly"}])),
     ?assert(filelib:is_dir("custom-assembly/target") == false),
     ok.
