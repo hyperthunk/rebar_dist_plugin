@@ -78,14 +78,14 @@ distclean(Config, AppFile) ->
 
 %% TODO: switch these to run post_generate and post_clean
 
-generate(Config, AppFile) ->
+generate(Config, RelFile) ->
     DistConfig = rebar_config:get(Config, dist, []),
     Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(generate, Attach) of
         true ->
             rebar_log:log(debug,
                 "Running Dist Plugin `generate' Hook ~p~n", [Config]),
-            dist(Config, AppFile);
+            dist(Config, RelFile);
         false ->
             ok
     end.
@@ -135,7 +135,6 @@ is_rel_dir(Dir) ->
         Path ->
             [$/|Other] = lists:reverse(Path),
             RelDir = lists:reverse(Other),
-            ?DEBUG("is ~s a prefix of ~p? ~p~n", [RelDir, Dir, lists:prefix(RelDir, Dir)]),
             lists:prefix(RelDir, Dir)
     end.
 
@@ -172,6 +171,12 @@ basename(RelDir) ->
             basename(undefined)
     end.
 
+appname() ->
+    get(appname).
+
+appvsn() ->
+    get(appvsn).
+
 fnmatch(Fun) when is_function(Fun, 1) ->
     #spec{glob={fnmatch, Fun}}.
 
@@ -185,14 +190,27 @@ fnmatch(Fun, Target) when is_function(Fun, 1) ->
 run(Func) ->
     case rebar_rel_utils:is_rel_dir() of
         {true, _} ->
-            io:format("Setting reldir to ~s~n", [rebar_utils:get_cwd()]),
+            %% io:format("Setting reldir to ~s~n", [rebar_utils:get_cwd()]),
+            ?DEBUG("Checking for reltool.config file(s)...~n", []),
             put(reldir, rebar_utils:get_cwd() ++ "/"),
             ok;
         _ ->
-            io:format("Setting basedir to ~s~n", [rebar_utils:get_cwd()]),
+            %% io:format("Setting basedir to ~s~n", [rebar_utils:get_cwd()]),
             put(basedir, rebar_utils:get_cwd() ++ "/"),
+            ?DEBUG("Checking for app file(s)...~n", []),
+            case rebar_app_utils:is_app_dir(rebar_utils:get_cwd()) of
+                {true, AppFile} ->
+                    ?DEBUG("Found ~p~n", [AppFile]),
+                    store_app_details(AppFile);
+                _ -> 
+                    ok
+            end,
             Func()
     end.
+
+store_app_details(AppFile) ->
+    put(appname, rebar_app_utils:app_name(AppFile)),
+    put(appvsn, rebar_app_utils:app_vsn(AppFile)).
 
 dist(Conf) ->
     Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
@@ -221,22 +239,33 @@ process_assembly(#assembly{name=Name, opts=Opts}) ->
     MergedFsEntries = [ output_def(S, F, Pwd) || {S, F} <- MergedPaths ],
     write_assembly(Format, Name, Outdir, MergedFsEntries, Opts).
 
-write_assembly(zip, Name, Outdir, MergedFsEntries, _Conf) ->
-    ensure_path(Outdir),
-    Filename = filename:join(Outdir, Name) ++ ".zip",
-    Result = zip:create(Filename, MergedFsEntries, []),
-    Result;
+write_assembly(zip, Name, Outdir, MergedFsEntries, Conf) ->
+    write_assembly(zip, ".zip", Name, Outdir, MergedFsEntries, Conf);
 write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
+    write_assembly(tar, ".tar.gz", Name, Outdir, MergedFsEntries, Conf).
+    
+write_assembly(Handler, Ext, Name, Outdir, MergedFsEntries, Conf) ->
     ensure_path(Outdir),
-    Filename = assembly_name(filename:join(Outdir, Name), ".tar.gz", Conf),
+    Filename = assembly_name(filename:join(Outdir, Name), Ext, Conf),
     Prefix = proplists:get_value(prefix, Conf, Name),
-    Entries = [ tar_entry(E, Prefix) || E <- MergedFsEntries ],
+    Entries = [ make_entry(Handler, E, Prefix) || E <- MergedFsEntries ],
     case rebar_config:get_global(dryrun, false) of
         false ->
-            erl_tar:create(Filename, Entries, [write, compressed]);
+            apply(?MODULE, Handler, [Filename, Entries]);
         _ ->
             print_assembly(Filename, Entries),
             ok
+    end.
+
+tar(Filename, Entries) ->
+    erl_tar:create(Filename, Entries, [write, compressed]).
+
+zip(Filename, Entries) ->
+    case zip:create(Filename, Entries, []) of
+        {ok, _} ->
+            ok;
+        Other ->
+            Other
     end.
 
 assembly_name(Path, Ext, Conf) ->
@@ -275,14 +304,28 @@ print_assembly(Filename, Entries) ->
 print_entry(E) ->
     io:format("INFO:  [~p] ==> Archive-Entry: ~p~n", [?MODULE, E]).
 
-%% TODO: to write a directory into the tar with a different name, we will need
-%% to (recursively) copy it to a "work area" with the new name
+read_file(Path) ->
+    {ok, Bin} = file:read_file(Path),
+    Bin.
 
-tar_entry(#entry{source=Src, target=Targ, data=undefined,
-                 info=#file_info{type=directory}}, Prefix) when Src /= Targ ->
-    {target(Prefix, Targ), Src};
-tar_entry(#entry{source=Src, info=#file_info{type=directory}}, Prefix) ->
+make_entry(zip, E, Prefix) ->
+    zip_entry(E, Prefix);
+make_entry(tar, E, Prefix) ->
+    target(E, Prefix).
+
+zip_entry(#entry{source=Src, target=Targ, data=undefined,
+                 info=#file_info{type=regular}}, Prefix) when Src == Targ ->
     target(Prefix, Src);
+zip_entry(#entry{source=Src, target=Targ, data=undefined,
+                 info=#file_info{type=regular}}, Prefix) when Src /= Targ ->
+    {target(Prefix, Targ), read_file(Src)};
+zip_entry(#entry{source=Src, target=undefined, data=Bin,
+                 info=#file_info{type=regular}}, Prefix) when is_binary(Bin) ->
+    {target(Prefix, Src), Bin};
+zip_entry(#entry{target=Targ, data=Bin,
+                 info=#file_info{type=regular}}, Prefix) when is_binary(Bin) ->
+    {target(Prefix, Targ), Bin}.
+
 tar_entry(#entry{source=Src, target=Targ, data=undefined,
                  info=#file_info{type=regular}}, Prefix) when Src == Targ ->
     target(Prefix, Src);
@@ -308,6 +351,7 @@ output_target(Entry, Base) ->
     re:replace(Entry, Base ++ "/", "", [{return, list}]).
 
 output_def(Spec, File, Data, Pwd) ->
+    ?DEBUG("Generating output for ~s[~p]~n", [File, Spec]),
     {ok, FI} = file:read_file_info(File),
     case Spec#spec.target of
         None when None == undefined orelse None == '_' ->
@@ -406,14 +450,12 @@ flatten_entries([]) ->
     [].
 
 collect_dirs(Incl) ->
-    Dirs = collect_glob(fun process_dir/2, Incl),
-    flatten_entries(Dirs).
+    flatten_entries(collect_glob(fun process_dir/2, Incl)).
 
 collect_files(Incl) ->
     collect_glob(fun process_files/2, Incl).
 
 collect_glob(Proc, Globs) ->
-    ?DEBUG("Searching for ~p~n", [Globs]),
     Cwd = rebar_utils:get_cwd(),
     Dirs = lists:duplicate(length(Globs), Cwd),
     {_MapAcc, FoldAcc} =
@@ -439,8 +481,7 @@ process_dir(Dir, {fnmatch, Glob}) ->
 process_dir(Dir, Glob) ->
     Entries = [ filename:join(Dir, D) || D <- filelib:wildcard(Glob) ],
     {Dirs, Files} = lists:partition(fun filelib:is_dir/1, Entries),
-    Found = lists:concat([[ process_dir(D) || D <- Dirs ], Files]),
-    Found.
+    lists:concat([[ process_dir(D) || D <- Dirs ], Files]).
 
 glob_filter(Glob) when is_function(Glob) ->
     fun(D) ->
