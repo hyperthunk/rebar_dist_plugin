@@ -311,7 +311,7 @@ read_file(Path) ->
 make_entry(zip, E, Prefix) ->
     zip_entry(E, Prefix);
 make_entry(tar, E, Prefix) ->
-    target(E, Prefix).
+    tar_entry(E, Prefix).
 
 zip_entry(#entry{source=Src, target=Targ, data=undefined,
                  info=#file_info{type=regular}}, Prefix) when Src == Targ ->
@@ -351,7 +351,7 @@ output_target(Entry, Base) ->
     re:replace(Entry, Base ++ "/", "", [{return, list}]).
 
 output_def(Spec, File, Data, Pwd) ->
-    ?DEBUG("Generating output for ~s[~p]~n", [File, Spec]),
+    ?DEBUG("Generating output for ~s~n", [File]),
     {ok, FI} = file:read_file_info(File),
     case Spec#spec.target of
         None when None == undefined orelse None == '_' ->
@@ -376,6 +376,7 @@ output_def(Spec, File, Data, Pwd) ->
             NewName = NameGen(File),
             output_def(Spec#spec{target={name, NewName}}, File, Data, Pwd);
         Target ->
+            ?DEBUG("Target == ~p~n", [Target]),
             case FI#file_info.type of
                 regular ->
                     NewName = filename:join(Target, filename:basename(File)),
@@ -562,7 +563,31 @@ merge_config(BaseConfig) ->
         _Other ->
             BaseConfig
     end,
-    (assembly_merge(NewBase))(base_assemblies(NewBase)).
+    FinalAssemblies = (assembly_merge(NewBase))(base_assemblies(NewBase)),
+    write_globals(FinalAssemblies, BaseConfig).
+
+write_globals(Assemblies, BaseConfig) ->
+    lists:map(write_globals(BaseConfig), Assemblies).
+
+write_globals(BaseConfig) ->
+    fun(#assembly{opts=Opts}=A) ->
+        Format = proplists:get_value(format, BaseConfig, undefined),
+        Version = proplists:get_value(version, BaseConfig, undefined),
+        ReFormatted = overwrite({format, Format}, Opts),
+        ReVersioned = overwrite({version, Version}, ReFormatted),
+        A#assembly{opts=ReVersioned};
+       (Other) -> Other
+    end.
+
+overwrite({_Key, undefined}, Opts) ->
+    Opts;
+overwrite({Key, Value}, Opts) ->
+    case lists:keyfind(Key, 1, Opts) of
+        false ->
+            [{Key, Value}|Opts];
+        _ ->
+            lists:keyreplace(Key, 1, Opts, {Key, Value})
+    end.
 
 base_assemblies(ReferencedAssemblies) ->
     Dir = filename:join(code:priv_dir(rebar_dist_plugin), "assemblies"),
