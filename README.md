@@ -16,7 +16,7 @@ Include the following tuple in your rebar deps:
 
 ```erlang
 {deps, [{rebar_dist_plugin, ".*", {git,
-    "git://github.com/hyperthunk/rebar-dist-plugin.git", "master"}}]}.
+    "git://github.com/hyperthunk/rebar_dist_plugin.git", "master"}}]}.
 ```
 
 Then you will be able to fetch and install the plugin (locally) with rebar:
@@ -39,7 +39,7 @@ Configure the dist plugin in your `rebar.config` as usual:
 {dist, [Options]}.
 ```
 
-See the [wiki](https://github.com/hyperthunk/rebar-dist-plugin/wiki) for details
+See the [wiki](https://github.com/hyperthunk/rebar_dist_plugin/wiki) for details
 on the various options (and commands).
 
 You execute the plugin like any other rebar command:
