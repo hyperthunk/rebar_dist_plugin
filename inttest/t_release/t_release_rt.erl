@@ -20,16 +20,21 @@ run(_Dir) ->
                                  [{dir, "release-tarball"}])),
     ?assertMatch({ok, _}, retest:sh("rebar compile-deps " ++ Verbose,
                              [{dir, "release-tarball"}])),
+    %% check that the {attach, [generate]} hook is working...
     ?assertMatch({ok, _}, retest:sh("rebar cl comp generate",
                                  [{dir, "release-tarball"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar dist " ++ Verbose,
-                                 [{dir, "release-tarball"}])),
+
+    %?assertMatch({ok, _}, retest:sh("rebar dist " ++ Verbose,
+    %                             [{dir, "release-tarball"}])),
+
     ?assertMatch({ok, _}, retest:sh("tar -zxf exemplar-1.2.3.tar.gz",
                                  [{dir, "release-tarball/dist"}])),
     ?assert(exists("exemplar/bin/exemplar")),
     ?assert(exists("exemplar/etc/app.config")),
     ?assert(exists("exemplar/releases/1.2.3/exemplar.rel")),
-    ?assertMatch({ok, _}, retest:sh("rebar distclean " ++ Verbose,
+
+    %% check that the {attach, [clean]} hook is working....
+    ?assertMatch({ok, _}, retest:sh("rebar clean " ++ Verbose,
                                  [{dir, "release-tarball"}])),
     ?assert(not exists("exemplar")),
     ok.

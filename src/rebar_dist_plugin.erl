@@ -43,7 +43,7 @@
 -compile(export_all).
 
 -export([dist/2, distclean/2]).
--export([generate/2, clean/2]).
+-export([post_generate/2, post_clean/2]).
 
 -compile(export_all).
 
@@ -63,7 +63,6 @@
 %%
 
 dist(Config, AppFile) ->
-    %% AppName will be the default output filename
     run(fun() ->
         {App, DistConfig} = scope_config(AppFile, Config),
         dist(#conf{ base=App, rebar=Config, dist=DistConfig })
@@ -78,7 +77,7 @@ distclean(Config, AppFile) ->
 
 %% TODO: switch these to run post_generate and post_clean
 
-generate(Config, RelFile) ->
+post_generate(Config, RelFile) ->
     DistConfig = rebar_config:get(Config, dist, []),
     Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(generate, Attach) of
@@ -90,7 +89,7 @@ generate(Config, RelFile) ->
             ok
     end.
 
-clean(Config, AppFile) ->
+post_clean(Config, AppFile) ->
     DistConfig = rebar_config:get(Config, dist, []),
     Attach = proplists:get_value(attach, DistConfig, []),
     case lists:member(clean, Attach) of
@@ -190,22 +189,37 @@ fnmatch(Fun, Target) when is_function(Fun, 1) ->
 run(Func) ->
     case rebar_rel_utils:is_rel_dir() of
         {true, _} ->
-            %% io:format("Setting reldir to ~s~n", [rebar_utils:get_cwd()]),
-            ?DEBUG("Checking for reltool.config file(s)...~n", []),
             put(reldir, rebar_utils:get_cwd() ++ "/"),
+            %%Func();
             ok;
         _ ->
-            %% io:format("Setting basedir to ~s~n", [rebar_utils:get_cwd()]),
-            put(basedir, rebar_utils:get_cwd() ++ "/"),
-            ?DEBUG("Checking for app file(s)...~n", []),
-            case rebar_app_utils:is_app_dir(rebar_utils:get_cwd()) of
-                {true, AppFile} ->
-                    ?DEBUG("Found ~p~n", [AppFile]),
-                    store_app_details(AppFile);
-                _ -> 
-                    ok
-            end,
-            Func()
+            BaseDir = rebar_config:get_global(base_dir, []),
+            Cwd = rebar_utils:get_cwd(),
+            case is_subdir(BaseDir, Cwd) of
+                false ->
+                    put(basedir, Cwd ++ "/"),
+                    ?DEBUG("Checking for app file(s)...~n", []),
+                    case rebar_app_utils:is_app_dir(rebar_utils:get_cwd()) of
+                        {true, AppFile} ->
+                            ?DEBUG("Found ~p~n", [AppFile]),
+                            store_app_details(AppFile);
+                        _ -> 
+                            ok
+                    end,
+                    Func();
+                true ->
+                    %% skip subdirs apart from the *release* directory
+                    ok 
+            end
+    end.
+
+is_subdir(Base, Dir) ->
+    ?DEBUG("Checking to see if ~s is a subdirectory of ~s~n", [Dir, Base]),
+    case lists:prefix(Base, Dir) of
+        true ->
+            length(filename:split(Dir)) > length(filename:split(Base));
+        _ ->
+            false
     end.
 
 store_app_details(AppFile) ->
