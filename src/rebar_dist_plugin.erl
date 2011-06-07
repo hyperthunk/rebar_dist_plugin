@@ -272,13 +272,17 @@ write_assembly(Handler, Ext, Name, Outdir, MergedFsEntries, Conf) ->
     end.
 
 tar(Filename, Entries) ->
+    ?DEBUG("Create Tarball: ~s~n", [Filename]),
     erl_tar:create(Filename, Entries, [write, compressed]).
 
 zip(Filename, Entries) ->
+    ?DEBUG("Create Zip Archive: ~s~n", [Filename]),
     case zip:create(Filename, Entries, []) of
         {ok, _} ->
             ok;
         Other ->
+            ?DEBUG("Failed!~n", []),
+            print_assembly(Filename, Entries),
             Other
     end.
 
@@ -315,8 +319,20 @@ print_assembly(Filename, Entries) ->
     io:format("INFO:  [~p] ==> Create-Archive: ~s~n", [?MODULE, Filename]),
     lists:map(fun print_entry/1, Entries).
 
-print_entry(E) ->
-    io:format("INFO:  [~p] ==> Archive-Entry: ~p~n", [?MODULE, E]).
+print_entry(E) when is_list(E) ->
+    io:format("INFO:  [~p] ==> Archive-Entry: [Source/Target: ~s]~n",
+              [?MODULE, E]);
+print_entry({E, Target}) when is_list(Target) andalso E == Target ->
+    io:format("INFO:  [~p] ==> Archive-Entry: [Source/Target: ~s, Data: ~s]~n", 
+              [?MODULE, E, "N/A"]);
+print_entry({E, Target}) when is_list(Target) andalso E /= Target ->
+    io:format("INFO:  [~p] ==> Archive-Entry: [Source: ~s, "
+            "Target: ~s, Data: N/A]~n", 
+            [?MODULE, E, Target]);
+print_entry({E, Data}) when is_binary(Data) ->
+    Bin = integer_to_list(byte_size(Data)) ++ " bytes", 
+    io:format("INFO:  [~p] ==> Archive-Entry: [Source/Target: ~s, Data: ~s]~n", 
+              [?MODULE, E, Bin]).
 
 read_file(Path) ->
     {ok, Bin} = file:read_file(Path),
@@ -365,7 +381,7 @@ output_target(Entry, Base) ->
     re:replace(Entry, Base ++ "/", "", [{return, list}]).
 
 output_def(Spec, File, Data, Pwd) ->
-    ?DEBUG("Generating output for ~s~n", [File]),
+    %% ?DEBUG("Generating output for ~s~n", [File]),
     {ok, FI} = file:read_file_info(File),
     case Spec#spec.target of
         None when None == undefined orelse None == '_' ->
@@ -584,15 +600,38 @@ write_globals(Assemblies, BaseConfig) ->
     lists:map(write_globals(BaseConfig), Assemblies).
 
 write_globals(BaseConfig) ->
+    Rewrites = [format, version, incl_dirs, incl_files, excl_dirs, excl_files],
     fun(#assembly{opts=Opts}=A) ->
-        Format = proplists:get_value(format, BaseConfig, undefined),
-        Version = proplists:get_value(version, BaseConfig, undefined),
-        ReFormatted = overwrite({format, Format}, Opts),
-        ReVersioned = overwrite({version, Version}, ReFormatted),
-        A#assembly{opts=ReVersioned};
+        %Format = proplists:get_value(format, BaseConfig, undefined),
+        %Version = proplists:get_value(version, BaseConfig, undefined),
+        %ReFormatted = overwrite({format, Format}, Opts),
+        %ReVersioned = overwrite({version, Version}, ReFormatted),
+        %A#assembly{opts=ReVersioned};
+        Updated = lists:foldl(rewrite_opts(BaseConfig), Opts, Rewrites),
+        A#assembly{opts=Updated};
        (Other) -> Other
     end.
 
+rewrite_opts(BaseConfig) ->
+    fun(Key, Opts) ->
+        Replacement = proplists:get_value(Key, BaseConfig, undefined),
+        overwrite({Key, Replacement}, Opts)
+    end.
+
+overwrite({Key, [_|_]=Value}, Opts) when Key == incl_dirs orelse
+                                   Key == incl_files orelse
+                                   Key == excl_dirs orelse 
+                                   Key == excl_files ->
+    case lists:keyfind(Key, 1, Opts) of
+        false ->
+            [{Key, Value}|Opts];
+        {Key, Config} when is_list(Config) ->
+            lists:keyreplace(Key, 1, Opts, {Key, Value ++ Config});
+        _ ->
+            lists:keyreplace(Key, 1, Opts, {Key, Value})
+    end;
+overwrite({_Key, []}, Opts) ->
+    Opts;
 overwrite({_Key, undefined}, Opts) ->
     Opts;
 overwrite({Key, Value}, Opts) ->
