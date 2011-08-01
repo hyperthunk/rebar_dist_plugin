@@ -304,7 +304,8 @@ release_vsn(Dir) ->
     File = filename:join(Dir, "reltool.config"),
     case filelib:is_regular(File) of
         true ->
-            rebar_rel_utils:get_reltool_release_info(File);
+            {ok, Config} = file:consult(File),
+            rebar_rel_utils:get_reltool_release_info(Config);
         _ ->
             ""
     end.

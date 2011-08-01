@@ -24,7 +24,7 @@ Then you will be able to fetch and install the plugin (locally) with rebar:
     user@host$ rebar get-deps compile
     user@host$ rebar dist skip_deps=true
 
-Alternatively, you may put the plugin into your `ERL_LIBS` path somewhere and 
+Alternatively, you may put the plugin into your `ERL_LIBS` path somewhere and
 use it in many projects. This can be done manually, or using a package manager:
 
     user@host$ epm install hyperthunk/rebar-dist-plugin  # or
@@ -46,3 +46,10 @@ You execute the plugin like any other rebar command:
 
     rebar clean generate    # if you're hooked into a release
     rebar distclean dist    # if you wish to explicitly assemble a distribution
+
+## Running the tests
+
+The project ships with a `Makefile` wrapper that will execute a bunch of tests
+against the examples directory using the [rebar_retest_plugin](https://github.com/hyperthunk/rebar_retest_plugin). As this
+configuration has separate dependencies (for test only), the simplest way to run
+these is to execute `make test` on the command line.
