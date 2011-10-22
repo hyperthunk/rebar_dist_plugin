@@ -15,9 +15,9 @@ run(_Dir) ->
         _ ->
             ""
     end,
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps clean compile " ++ Verbose,
                                     [{dir, "external-config"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar cl comp dist " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar dist " ++ Verbose,
                                     [{dir, "external-config"}])),
     ?assertMatch({ok, _}, retest:sh("tar -zxf foo-1.2.3.tar.gz",
                                     [{dir, "external-config/dist"}])),
