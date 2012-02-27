@@ -1,6 +1,6 @@
 {application, rebar_dist_plugin, [
     {description, "Rebar Dist Plugin"},
-    {vsn, git},
+    {vsn, {cmd, "git describe --abbrev=0"}},
     {registered, []},
     {applications, [kernel,stdlib]},
     {env, []}
