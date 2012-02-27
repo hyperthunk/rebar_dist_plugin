@@ -224,7 +224,13 @@ is_subdir(Base, Dir) ->
 
 store_app_details(AppFile) ->
     put(appname, rebar_app_utils:app_name(AppFile)),
-    put(appvsn, rebar_app_utils:app_vsn(AppFile)).
+    put(appvsn, clean_app_version(AppFile)).
+
+clean_app_version(AppFile) ->
+    case rebar_app_utils:app_vsn(AppFile) of
+        ("v" ++ Rest) -> Rest;
+        Vsn -> Vsn
+    end.
 
 dist(Conf) ->
     Results = [ process_assembly(A) || A <- find_assemblies(Conf) ],
@@ -314,7 +320,10 @@ scm_version({git, tag}) ->
     scm_version({scm, "git describe --abbrev=0"});
 scm_version({scm, Cmd}) ->
     {ok, Vsn} = rebar_utils:sh(Cmd, []),
-    string:strip(Vsn, right, $\n).
+    case string:strip(Vsn, right, $\n) of
+        ("v" ++ Rest) -> Rest;
+        Vsn2 -> Vsn2
+    end.
 
 print_assembly(Filename, Entries) ->
     io:format("INFO:  [~p] ==> Create-Archive: ~s~n", [?MODULE, Filename]),
