@@ -142,14 +142,10 @@ reldir() ->
 
 relvsn() ->
     Dir = reldir(),
-    ?DEBUG("Checking for reltool.config in ~p~n", [Dir]),
+    ?DEBUG("Checking for reltool.config...~n", []),
     case catch(release_vsn(Dir)) of
-        {_Name, Ver} ->
-            ?DEBUG("Found version ~p~n", [Ver]),
-            Ver;
-        Other ->
-            ?WARN("Bad release_vsn? ~p~n", [Other]),
-            undefined
+        {_Name, Ver} -> Ver;
+        _ -> undefined
     end.
 
 basedir() ->
@@ -159,18 +155,18 @@ basename() ->
     basename(reldir()).
 
 basename(undefined) ->
-    ?WARN("No release_dir? ~n", []),
     filename:basename(rebar_utils:get_cwd());
 basename(RelDir) ->
     case release_vsn(RelDir) of
         {Name, _Ver} ->
             Name;
         Other ->
-            ?WARN("Bad release_vsn? ~p~n", [Other]),
+            ?WARN("Bad release version ~p~n", [Other]),
             basename(undefined)
     end.
 
 appname() ->
+    ?DEBUG("getting appname from the process dictionary...~n", []),
     get(appname).
 
 appvsn() ->
@@ -224,7 +220,9 @@ is_subdir(Base, Dir) ->
 
 store_app_details(AppFile) ->
     put(appname, rebar_app_utils:app_name(AppFile)),
-    put(appvsn, clean_app_version(AppFile)).
+    put(appvsn, clean_app_version(AppFile)),
+    ?DEBUG("storing application name: ~p~n", [get(appname)]),
+    ?DEBUG("storing application version: ~p~n", [get(appvsn)]).
 
 clean_app_version(AppFile) ->
     case rebar_app_utils:app_vsn(AppFile) of
@@ -266,6 +264,7 @@ write_assembly(tar, Name, Outdir, MergedFsEntries, Conf) ->
     
 write_assembly(Handler, Ext, Name, Outdir, MergedFsEntries, Conf) ->
     ensure_path(Outdir),
+    ?DEBUG("Processing assembly ~s~n", [Name]),
     Filename = assembly_name(filename:join(Outdir, Name), Ext, Conf),
     Prefix = proplists:get_value(prefix, Conf, Name),
     Entries = [ make_entry(Handler, E, Prefix) || E <- MergedFsEntries ],
@@ -576,12 +575,15 @@ outdir(Opts) ->
 find_assemblies(#conf{ base=Base, dist=DistConfig }) ->
     case lists:filter(fun(X) -> element(1, X) == assembly end, DistConfig) of
         [] ->
-            [#assembly{name=Base, opts=DistConfig}];
+            ?DEBUG("No explicit assembly found: generating default...~n", []),
+            [#assembly{ name=Base, opts=DistConfig }];
         Assemblies ->
+            ?DEBUG("Found assemblies: ~p~n", [Assemblies]),
             Assemblies
     end.
 
 scope_config(undefined, Config) ->
+    ?DEBUG("No .app file passed to dist/2~n", []),
     App = basename(),
     BaseConfig = rebar_config:get_list(Config, dist, []),
     {App, [{app, App}|merge_config(BaseConfig)]};

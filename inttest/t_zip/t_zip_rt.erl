@@ -24,6 +24,7 @@ run(_Dir) ->
         _ ->
             ""
     end,
+
     ?assertMatch({ok, _}, retest:sh("./rebar get-deps " ++ Verbose, [])),
     % ?assertMatch({ok, _}, retest:sh("./rebar compile-deps " ++ Verbose, [])),
     ?assertMatch({ok, _}, retest:sh("./rebar cl comp", [])),

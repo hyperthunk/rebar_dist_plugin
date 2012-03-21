@@ -12,11 +12,11 @@ files() ->
 run(Dir) ->
     Verbose = case rebar_config:is_verbose() of
         true -> 
-            "-v";
+            "-v4";
         _ ->
             ""
     end,
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile " ++ Verbose,
                                     [{dir, "custom-assembly"}])),
     ?assertMatch({ok, _}, retest:sh("rebar escriptize dist " ++ Verbose,
                                     [{dir, "custom-assembly"}])),

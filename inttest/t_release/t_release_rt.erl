@@ -12,13 +12,13 @@ files() ->
 run(_Dir) ->
     Verbose = case rebar_config:is_verbose() of
         true -> 
-            "-v";
+            "-v4";
         _ ->
             ""
     end,
     ?assertMatch({ok, _}, retest:sh("rebar get-deps " ++ Verbose,
                                  [{dir, "release-tarball"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar clean compile " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar skip_deps=true clean compile " ++ Verbose,
                              [{dir, "release-tarball"}])),
     %% check that the {attach, [generate]} hook is working...
     ?assertMatch({ok, _}, retest:sh("rebar generate",
