@@ -12,15 +12,11 @@ files() ->
 run(_Dir) ->
     Verbose = case rebar_config:is_verbose() of
         true -> 
-            "-v";
+            "-v4";
         _ ->
             ""
     end,
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps " ++ Verbose,
-                                 [{dir, "project-zip"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar compile-deps " ++ Verbose,
-                             [{dir, "project-zip"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar cl comp generate",
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile " ++ Verbose,
                                  [{dir, "project-zip"}])),
     ?assertMatch({ok, _}, retest:sh("rebar dist " ++ Verbose,
                                  [{dir, "project-zip"}])),

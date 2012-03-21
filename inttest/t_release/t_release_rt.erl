@@ -18,7 +18,7 @@ run(_Dir) ->
     end,
     ?assertMatch({ok, _}, retest:sh("rebar get-deps " ++ Verbose,
                                  [{dir, "release-tarball"}])),
-    ?assertMatch({ok, _}, retest:sh("rebar compile-deps " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar compile " ++ Verbose,
                              [{dir, "release-tarball"}])),
     %% check that the {attach, [generate]} hook is working...
     ?assertMatch({ok, _}, retest:sh("rebar cl comp generate",

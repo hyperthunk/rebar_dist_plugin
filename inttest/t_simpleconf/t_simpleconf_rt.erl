@@ -16,7 +16,7 @@ run(Dir) ->
         _ ->
             ""
     end,
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile " ++ Verbose,
                                     [{dir, "custom-assembly"}])),
     ?assertMatch({ok, _}, retest:sh("rebar escriptize dist " ++ Verbose,
                                     [{dir, "custom-assembly"}])),

@@ -15,7 +15,7 @@ run(_Dir) ->
         _ ->
             ""
     end,
-    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile-deps " ++ Verbose,
+    ?assertMatch({ok, _}, retest:sh("rebar get-deps compile " ++ Verbose,
                                     [{dir, "external-config"}])),
     ?assertMatch({ok, _}, retest:sh("rebar cl comp dist " ++ Verbose,
                                     [{dir, "external-config"}])),
